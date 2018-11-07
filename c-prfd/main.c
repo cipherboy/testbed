@@ -276,11 +276,11 @@ static PRFileDesc* newBufferPRFileDesc(uint8_t* read_buf, size_t read_capacity, 
         fd->secret->read_ptr = 0;
         fd->secret->write_ptr = 0;
 
-        fd->secret->read_ptr = 93 + 5;
+/*        fd->secret->read_ptr = 93 + 5;
         uint8_t fake_hello[21] = { 0x16, 0x03, 0x03, 0x00, 0x5d, 0x20, 0x00,
             0x00, 0x59, 0x03, 0x03, 0x0a, 0xca, 0x21,
             0x58, 0x8b, 0xe2, 0xd9, 0x9e, 0x13, 0x67 };
-        memcpy(fd->secret->read_bytes, fake_hello, 21);
+        memcpy(fd->secret->read_bytes, fake_hello, 21);*/
 
         fd->lower = NULL;
         fd->higher = NULL;
@@ -309,7 +309,12 @@ int main(int argc, char** argv)
     uint8_t* read_buf = calloc(read_size, sizeof(uint8_t));
     size_t write_size = 2048;
     uint8_t* write_buf = calloc(write_size, sizeof(uint8_t));
+    PRIntn optval = 1;
     PRFileDesc* nspr = newBufferPRFileDesc(read_buf, read_size, write_buf, write_size);
+    PRSocketOptionData nonblocking;
+    nonblocking.option = PR_SockOpt_Nonblocking;
+    nonblocking.value.non_blocking = PR_TRUE;
+    PR_SetSocketOption(nspr, &nonblocking);
 
     // Ciphers to enable.
     static const PRUint16 good_ciphers[] = {
@@ -388,6 +393,7 @@ int main(int argc, char** argv)
         }
 
         newfd = SSL_ImportFD(model, nspr);
+        PR_SetSocketOption(nspr, &nonblocking);
         if (newfd == NULL) {
             const PRErrorCode err = PR_GetError();
             fprintf(stderr, "error: SSL_ImportFD error %d: %s\n",
@@ -421,6 +427,26 @@ int main(int argc, char** argv)
             err, PR_ErrorToName(err));
         exit(1);
     }*/
+
+    printf("Writing connection...\n");
+    char *buf = calloc(0, sizeof(char));
+    PRInt32 ret = PR_Write(nspr, buf, 0);
+    if (ret < 0) {
+        const PRErrorCode err = PR_GetError();
+        fprintf(stderr, "error: PR_Write error %d: %s\n",
+            err, PR_ErrorToName(err));
+        exit(1);
+    }
+    printf("Reading connection...\n");
+    ret = PR_Read(nspr, buf, sizeof(buf));
+    if (ret < 0) {
+        const PRErrorCode err = PR_GetError();
+        fprintf(stderr, "error: PR_Read error %d: %s\n",
+            err, PR_ErrorToName(err));
+        exit(1);
+    }
+
+    printf("Closing connection...\n");
 
     // Send close_notify alert.
     if (PR_Shutdown(nspr, PR_SHUTDOWN_BOTH) != PR_SUCCESS) {
