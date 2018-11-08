@@ -16,11 +16,13 @@
 #include <ssl.h>
 #include <sslproto.h>
 
+// Random includes
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 #include <strings.h>
+#include <errno.h>
 
 #define DEBUG 1
 
@@ -45,12 +47,12 @@ void print_trace(void)
 
 struct PRFilePrivate {
     uint8_t* read_bytes;
-    size_t read_capacity;
-    size_t read_ptr;
+    size_t *read_capacity;
+    size_t *read_ptr;
 
     uint8_t* write_bytes;
-    size_t write_capacity;
-    size_t write_ptr;
+    size_t *write_capacity;
+    size_t *write_ptr;
 
     bool closed;
 };
@@ -114,27 +116,31 @@ static PRInt32 PRBufferSend(PRFileDesc* fd, void* buf, PRInt32 amount, PRIntn fl
      * possible, else ignore it -- never error. */
 
     PRFilePrivate* internal = fd->secret;
-    if (internal->write_ptr < internal->write_capacity) {
-        uint8_t* offset = internal->write_bytes + internal->write_ptr;
+    if (*internal->write_ptr < *internal->write_capacity) {
+        uint8_t* offset = internal->write_bytes + *internal->write_ptr;
         size_t write_len = amount;
 
         /* Write at most max(amount, free_space) bytes. */
-        if (write_len > internal->write_capacity - internal->write_ptr) {
-            write_len = internal->write_capacity - internal->write_ptr;
+        if (write_len > *internal->write_capacity - *internal->write_ptr) {
+            write_len = *internal->write_capacity - *internal->write_ptr;
         }
 
         printf("Wrote: %zu of %d bytes\n", write_len, amount);
         memcpy(offset, buf, write_len);
 
         /* Update ptr to next available byte. */
-        internal->write_ptr += write_len;
+        *internal->write_ptr += write_len;
 
         return write_len;
     }
 
     printf("Failed to write %d bytes\n", amount);
 
-    return 0;
+    /* Under correct Unix non-blocking socket semantics, if we lack data to
+     * read, return a negative length and set EWOULDBLOCK. This is documented
+     * in `man 2 recv`. */
+    PR_SetError(PR_WOULD_BLOCK_ERROR, EWOULDBLOCK);
+    return -1;
 }
 
 static PRInt32 PRBufferRecv(PRFileDesc* fd, void* buf, PRInt32 amount, PRIntn flags, PRIntervalTime timeout)
@@ -145,13 +151,13 @@ static PRInt32 PRBufferRecv(PRFileDesc* fd, void* buf, PRInt32 amount, PRIntn fl
      * buffer if possible, else ignore it -- never error. */
     PRFilePrivate* internal = fd->secret;
 
-    if (internal->read_ptr > 0) {
+    if (*internal->read_ptr > 0) {
         uint8_t read_len = amount;
         uint8_t* offset = internal->read_bytes;
-        uint8_t* memset_offset = internal->read_bytes + internal->read_ptr;
-        size_t memmove_len = internal->read_ptr - amount;
-        if (read_len > internal->read_ptr) {
-            read_len = internal->read_ptr;
+        uint8_t* memset_offset = internal->read_bytes + *internal->read_ptr;
+        size_t memmove_len = *internal->read_ptr - amount;
+        if (read_len > *internal->read_ptr) {
+            read_len = *internal->read_ptr;
             memmove_len = 0;
         }
         offset += read_len;
@@ -163,16 +169,17 @@ static PRInt32 PRBufferRecv(PRFileDesc* fd, void* buf, PRInt32 amount, PRIntn fl
             memmove(internal->read_bytes, offset, memmove_len);
         }
 
-        memset(memset_offset, 0, internal->read_capacity - internal->read_ptr);
+        memset(memset_offset, 0, *internal->read_capacity - *internal->read_ptr);
 
-        internal->read_ptr -= read_len;
+        *internal->read_ptr -= read_len;
 
         return read_len;
     }
 
     printf("Failed to read %d bytes\n", amount);
 
-    return 0;
+    PR_SetError(PR_WOULD_BLOCK_ERROR, EWOULDBLOCK);
+    return -1;
 }
 
 static PRStatus PRBufferGetSocketOption(PRFileDesc* fd, PRSocketOptionData* data)
@@ -195,13 +202,22 @@ static PRStatus PRBufferGetSocketOption(PRFileDesc* fd, PRSocketOptionData* data
         data->value.keep_alive = PR_FALSE;
         data->value.mcast_loopback = PR_FALSE;
         data->value.no_delay = PR_TRUE;
-        data->value.max_segment = internal->read_capacity;
-        data->value.recv_buffer_size = internal->read_capacity;
-        data->value.send_buffer_size = internal->write_capacity;
+        data->value.max_segment = *internal->read_capacity;
+        data->value.recv_buffer_size = *internal->read_capacity;
+        data->value.send_buffer_size = *internal->write_capacity;
         return PR_SUCCESS;
     }
 
     return PR_FAILURE;
+}
+
+static PRStatus PRBufferSetSocketOption(PRFileDesc* fd, PRSocketOptionData* data)
+{
+    /* This gives the caller control over setting socket options. It is the
+     * equivalent of fcntl() with F_SETFL. In our case, O_NONBLOCK is the
+     * only thing passed in, which we always return as true anyways, so
+     * ignore the result. */
+    return PR_SUCCESS;
 }
 
 static const PRIOMethods PRIOBufferMethods = {
@@ -234,7 +250,7 @@ static const PRIOMethods PRIOBufferMethods = {
     (PRReservedFN)invalidInternalCall,
     (PRReservedFN)invalidInternalCall,
     (PRGetsocketoptionFN)PRBufferGetSocketOption,
-    (PRSetsocketoptionFN)invalidInternalCall,
+    (PRSetsocketoptionFN)PRBufferSetSocketOption,
     (PRSendfileFN)invalidInternalCall,
     (PRConnectcontinueFN)invalidInternalCall,
     (PRReservedFN)invalidInternalCall,
@@ -260,7 +276,8 @@ static void freeBufferPRFileDesc(PRFileDesc* fd)
     fd->secret->write_capacity = 0;
 }
 
-static PRFileDesc* newBufferPRFileDesc(uint8_t* read_buf, size_t read_capacity, uint8_t* write_buf, size_t write_capacity)
+static PRFileDesc* newBufferPRFileDesc(uint8_t* read_buf, size_t* read_capacity, size_t* read_ptr,
+                                       uint8_t* write_buf, size_t* write_capacity, size_t* write_ptr)
 {
     PRFileDesc* fd;
 
@@ -273,14 +290,8 @@ static PRFileDesc* newBufferPRFileDesc(uint8_t* read_buf, size_t read_capacity, 
 
         fd->secret->read_capacity = read_capacity;
         fd->secret->write_capacity = write_capacity;
-        fd->secret->read_ptr = 0;
-        fd->secret->write_ptr = 0;
-
-/*        fd->secret->read_ptr = 93 + 5;
-        uint8_t fake_hello[21] = { 0x16, 0x03, 0x03, 0x00, 0x5d, 0x20, 0x00,
-            0x00, 0x59, 0x03, 0x03, 0x0a, 0xca, 0x21,
-            0x58, 0x8b, 0xe2, 0xd9, 0x9e, 0x13, 0x67 };
-        memcpy(fd->secret->read_bytes, fake_hello, 21);*/
+        fd->secret->read_ptr = read_ptr;
+        fd->secret->write_ptr = write_ptr;
 
         fd->lower = NULL;
         fd->higher = NULL;
@@ -305,12 +316,23 @@ int main(int argc, char** argv)
     }
 
     /* Initialize Client Buffers */
-    size_t read_size = 2048;
-    uint8_t* read_buf = calloc(read_size, sizeof(uint8_t));
-    size_t write_size = 2048;
-    uint8_t* write_buf = calloc(write_size, sizeof(uint8_t));
+    /* In order to maintain complete control over our buffers, we need to
+     * create our buffers, sizes, and pointers here. This means that the
+     * PRFileDesc does nothing except hold pointers to our memory and update
+     * the contents/values as it sees fit (send/recv). If instead the buffer
+     * took access (or created access itself), we'd need to get access to
+     * them befor giving it to NSS, as NSS wraps our PRFileDesc in one of
+     * their PRFileDescs, removing our access to fd->secret. */
+    size_t c_read_size = 2048;
+    size_t c_read_ptr = 0;
+    uint8_t* c_read_buf = calloc(read_size, sizeof(uint8_t));
+    size_t c_write_size = 2048;
+    size_t c_write_ptr = 0;
+    uint8_t* c_write_buf = calloc(write_size, sizeof(uint8_t));
+
     PRIntn optval = 1;
-    PRFileDesc* nspr = newBufferPRFileDesc(read_buf, read_size, write_buf, write_size);
+    PRFileDesc* nspr = newBufferPRFileDesc(read_buf, &read_size, &read_ptr,
+                                           write_buf, &write_size, &write_ptr);
     PRSocketOptionData nonblocking;
     nonblocking.option = PR_SockOpt_Nonblocking;
     nonblocking.value.non_blocking = PR_TRUE;
@@ -394,6 +416,7 @@ int main(int argc, char** argv)
 
         newfd = SSL_ImportFD(model, nspr);
         PR_SetSocketOption(nspr, &nonblocking);
+
         if (newfd == NULL) {
             const PRErrorCode err = PR_GetError();
             fprintf(stderr, "error: SSL_ImportFD error %d: %s\n",
@@ -420,13 +443,21 @@ int main(int argc, char** argv)
     }
 
     /* This will always fail since we're waiting for the handshake to
-     * complete, but we haven't actually attached this to anything... */
-    /*if (SSL_ForceHandshake(nspr) != SECSuccess) {
+     * complete, but we haven't actually given it any data on the
+     * server end of the connection. */
+    printf("Trying handshake...\n");
+    if (SSL_ForceHandshake(nspr) != SECSuccess) {
         const PRErrorCode err = PR_GetError();
         fprintf(stderr, "error: SSL_ForceHandshake error %d: %s\n",
             err, PR_ErrorToName(err));
-        exit(1);
-    }*/
+        // exit(1);
+    }
+
+/*        fd->secret->read_ptr = 93 + 5;
+        uint8_t fake_hello[21] = { 0x16, 0x03, 0x03, 0x00, 0x5d, 0x20, 0x00,
+            0x00, 0x59, 0x03, 0x03, 0x0a, 0xca, 0x21,
+            0x58, 0x8b, 0xe2, 0xd9, 0x9e, 0x13, 0x67 };
+        memcpy(fd->secret->read_bytes, fake_hello, 21);*/
 
     printf("Writing connection...\n");
     char *buf = calloc(0, sizeof(char));
