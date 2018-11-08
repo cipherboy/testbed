@@ -59,7 +59,8 @@ openssl req -inform der -in sslserver.csr.der -out sslserver.csr
 # Sign CSR
 # https://www.dogtagpki.org/wiki/Issuing_SSL_Server_Certificate_with_NSS
 
-echo -e "y\n\ny\ny\n${CA_SKID}\n\n\n\n2\n7\n${OCSP}\n\n\n\n" | \
+echo "$SKID - $OCSP"
+echo -e "y\n\ny\ny\n${SKID}\n\n\n\n2\n7\n${OCSP}\n\n\n\n" |
  certutil -C \
  -d nssdb \
  -f password.txt \
@@ -72,3 +73,4 @@ echo -e "y\n\ny\ny\n${CA_SKID}\n\n\n\n2\n7\n${OCSP}\n\n\n\n" | \
  --extAIA \
  --keyUsage critical,dataEncipherment,keyEncipherment,digitalSignature \
  --extKeyUsage serverAuth
+
