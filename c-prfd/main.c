@@ -680,9 +680,9 @@ int main(int argc, char** argv)
         printf("Client Handshake:\n");
         if (SSL_ForceHandshake(c_nspr) != SECSuccess) {
             const PRErrorCode err = PR_GetError();
-            fprintf(stderr, "error: SSL_ForceHandshake error %d: %s\n",
-                err, PR_ErrorToName(err));
             if (err != PR_WOULD_BLOCK_ERROR) {
+                fprintf(stderr, "error: SSL_ForceHandshake error %d: %s\n",
+                    err, PR_ErrorToName(err));
                 exit(1);
             }
         }
@@ -690,9 +690,9 @@ int main(int argc, char** argv)
         printf("\n\nServer Handshake:\n");
         if (SSL_ForceHandshake(s_nspr) != SECSuccess) {
             const PRErrorCode err = PR_GetError();
-            fprintf(stderr, "error: SSL_ForceHandshake error %d: %s\n",
-                err, PR_ErrorToName(err));
             if (err != PR_WOULD_BLOCK_ERROR) {
+                fprintf(stderr, "error: SSL_ForceHandshake error %d: %s\n",
+                    err, PR_ErrorToName(err));
                 exit(1);
             }
         }
