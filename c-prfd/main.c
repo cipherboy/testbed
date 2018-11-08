@@ -27,7 +27,7 @@
 #include <string.h>
 #include <strings.h>
 
-#define DEBUG 1
+#define DEBUG 0
 
 /* Obtain a backtrace and print it to stdout. */
 void print_trace(void)
@@ -119,6 +119,13 @@ static PRInt32 PRBufferSend(PRFileDesc* fd, void* buf, PRInt32 amount, PRIntn fl
      * possible, else ignore it -- never error. */
 
     PRFilePrivate* internal = fd->secret;
+
+#ifdef DEBUG
+#if DEBUG
+    printf("Trying write: [%zu/%zu] - req:%d\n", *internal->write_ptr, *internal->write_capacity, amount);
+#endif
+#endif
+
     if (*internal->write_ptr < *internal->write_capacity) {
         uint8_t* offset = internal->write_bytes + *internal->write_ptr;
         size_t write_len = amount;
@@ -128,16 +135,31 @@ static PRInt32 PRBufferSend(PRFileDesc* fd, void* buf, PRInt32 amount, PRIntn fl
             write_len = *internal->write_capacity - *internal->write_ptr;
         }
 
+#ifdef DEBUG
+#if DEBUG
         printf("Wrote: %zu of %d bytes\n", write_len, amount);
+#endif
+#endif
         memcpy(offset, buf, write_len);
 
         /* Update ptr to next available byte. */
         *internal->write_ptr += write_len;
 
+#ifdef DEBUG
+#if DEBUG
+        printf("Finished write: [%zu/%zu] - req:%d\n", *internal->write_ptr, *internal->write_capacity, amount);
+#endif
+#endif
         return write_len;
     }
 
     printf("Failed to write %d bytes\n", amount);
+
+#ifdef DEBUG
+#if DEBUG
+    printf("Finished write: [%zu/%zu] - req:%d\n", *internal->write_ptr, *internal->write_capacity, amount);
+#endif
+#endif
 
     /* Under correct Unix non-blocking socket semantics, if we lack data to
      * read, return a negative length and set EWOULDBLOCK. This is documented
@@ -153,33 +175,57 @@ static PRInt32 PRBufferRecv(PRFileDesc* fd, void* buf, PRInt32 amount, PRIntn fl
      * Because we're implementing this as a (large) buffer, copy from the
      * buffer if possible, else ignore it -- never error. */
     PRFilePrivate* internal = fd->secret;
+#ifdef DEBUG
+#if DEBUG
+    printf("Trying read: [%zu/%zu] - req:%d\n", *internal->read_ptr, *internal->read_capacity, amount);
+#endif
+#endif
 
     if (*internal->read_ptr > 0) {
-        uint8_t read_len = amount;
+        size_t read_len = amount;
         uint8_t* offset = internal->read_bytes;
-        uint8_t* memset_offset = internal->read_bytes + *internal->read_ptr;
         size_t memmove_len = *internal->read_ptr - amount;
-        if (read_len > *internal->read_ptr) {
+
+        if (read_len > (*internal->read_ptr)) {
+#ifdef DEBUG
+#if DEBUG
+            printf("Truncating move due to exceeding internal read ptr\n");
+#endif
+#endif
             read_len = *internal->read_ptr;
             memmove_len = 0;
         }
+
         offset += read_len;
 
-        printf("Read: %zu of %d bytes\n", read_len, amount);
+#ifdef DEBUG
+#if DEBUG
+        printf("Read: %zu of %d bytes -- moving %zu\n", read_len, amount, memmove_len);
+#endif
+#endif
         memcpy(buf, internal->read_bytes, read_len);
 
         if (memmove_len > 0) {
             memmove(internal->read_bytes, offset, memmove_len);
         }
 
-        memset(memset_offset, 0, *internal->read_capacity - *internal->read_ptr);
-
         *internal->read_ptr -= read_len;
 
+#ifdef DEBUG
+#if DEBUG
+        printf("Finished read: [%zu/%zu] - req:%d\n", *internal->read_ptr, *internal->read_capacity, amount);
+#endif
+#endif
         return read_len;
     }
 
     printf("Failed to read %d bytes\n", amount);
+
+#ifdef DEBUG
+#if DEBUG
+    printf("Finished read: [%zu/%zu] - req:%d\n", *internal->read_ptr, *internal->read_capacity, amount);
+#endif
+#endif
 
     PR_SetError(PR_WOULD_BLOCK_ERROR, EWOULDBLOCK);
     return -1;
@@ -441,18 +487,48 @@ static PRFileDesc* setup_nss_client(PRFileDesc* c_nspr, char* host)
     return c_nspr;
 }
 
-static CERTCertificate* get_cert()
+static CERTCertificate* get_cert(char* host)
 {
-    CERTCertDBHandle* db;
-    if (CERT_OpenCertDBFilename(db, "nssdb", PR_FALSE) != SECSuccess) {
-        const PRErrorCode err = PR_GetError();
-        fprintf(stderr, "error: OpenCertDBFilename error %d: %s\n",
-            err, PR_ErrorToName(err));
-        exit(1);
+    CERTCertList* clist;
+    CERTCertListNode* cln;
+
+    clist = PK11_ListCerts(PK11CertListUser, NULL);
+
+    for (cln = CERT_LIST_HEAD(clist); !CERT_LIST_END(cln, clist);
+         cln = CERT_LIST_NEXT(cln)) {
+        CERTCertificate* cert = cln->cert;
+        const char* nickname = (const char*)cln->appData;
+
+        if (!nickname) {
+            nickname = cert->nickname;
+        }
+
+        if (strcmp(host, nickname) == 0) {
+            printf("Found cert with nickname: %s\n", nickname);
+            return cert;
+        }
     }
 
-    //return ddCERT_FindCertByNameString
     return NULL;
+}
+
+static SECKEYPrivateKey* get_privkey(CERTCertificate* cert)
+{
+    PK11SlotInfo* slot = NULL;
+
+    slot = PK11_FindSlotByName("NSS Certificate DB");
+    if (slot == NULL) {
+        printf("Error finding slot!\n");
+        exit(2);
+    }
+
+    PRInt32 rv = PK11_Authenticate(slot, PR_FALSE, "Secret.123");
+    if (rv != SECSuccess) {
+        printf("Invalid password for slot!\n");
+        exit(3);
+    }
+
+    return PK11_FindPrivateKeyFromCert(slot, cert, NULL);
 }
 
 static PRFileDesc* setup_nss_server(PRFileDesc* s_nspr, char* host)
@@ -462,7 +538,17 @@ static PRFileDesc* setup_nss_server(PRFileDesc* s_nspr, char* host)
     nonblocking.value.non_blocking = PR_TRUE;
     PR_SetSocketOption(s_nspr, &nonblocking);
 
-    CERTCertificate* cert = get_cert();
+    CERTCertificate* cert = get_cert("NSS Certificate DB:ca.cipherboy.com");
+    if (cert == NULL) {
+        printf("Failed to find certificate for host: %s\n", host);
+        exit(1);
+    }
+
+    SECKEYPrivateKey* priv_key = get_privkey(cert);
+    if (priv_key == NULL) {
+        printf("Failed to find private key for certificate for host: %s\n", host);
+        exit(1);
+    }
 
     PRFileDesc* model = PR_NewTCPSocket();
     PRFileDesc* newfd = SSL_ImportFD(NULL, model);
@@ -505,6 +591,15 @@ static PRFileDesc* setup_nss_server(PRFileDesc* s_nspr, char* host)
     }
     s_nspr = newfd;
     PR_Close(model);
+
+    if (SSL_ConfigSecureServer(s_nspr, cert, priv_key, kt_rsa) != SECSuccess) {
+        const PRErrorCode err = PR_GetError();
+        fprintf(stderr, "error: SSL_ResetHandshake error %d: %s\n",
+            err, PR_ErrorToName(err));
+        exit(1);
+    }
+
+    SSL_ConfigServerSessionIDCache(1, 100, 100, NULL);
 
     // Reset the handshake status -- server end
     if (SSL_ResetHandshake(s_nspr, PR_TRUE) != SECSuccess) {
@@ -611,17 +706,22 @@ int main(int argc, char** argv)
             0x58, 0x8b, 0xe2, 0xd9, 0x9e, 0x13, 0x67 };
         memcpy(fd->secret->read_bytes, fake_hello, 21);*/
 
-    printf("Writing connection...\n");
-    char* buf = calloc(0, sizeof(char));
-    PRInt32 ret = PR_Write(c_nspr, buf, 0);
+    printf("Send a message from the client to the server...\n");
+    char* buf = calloc(1024, sizeof(char));
+    char* buf2 = calloc(1024, sizeof(char));
+    char* client_message = "Cooking MCs";
+    char* server_message = "like a pound of bacon";
+
+    memcpy(buf, client_message, strlen(client_message));
+    PRInt32 ret = PR_Write(c_nspr, buf, strlen(buf));
     if (ret < 0) {
         const PRErrorCode err = PR_GetError();
         fprintf(stderr, "error: PR_Write error %d: %s\n",
             err, PR_ErrorToName(err));
         exit(1);
     }
-    printf("Reading connection...\n");
-    ret = PR_Read(c_nspr, buf, sizeof(buf));
+
+    ret = PR_Read(s_nspr, buf2, 1024);
     if (ret < 0) {
         const PRErrorCode err = PR_GetError();
         fprintf(stderr, "error: PR_Read error %d: %s\n",
@@ -629,12 +729,41 @@ int main(int argc, char** argv)
         exit(1);
     }
 
-    printf("Closing connection...\n");
+    memset(buf, 0, 1024);
+    memcpy(buf, buf2, ret);
+    printf("Received message from client: %s [len: %d]\n", buf, ret);
+
+    printf("\n\n");
+
+    /* Send a message back! */
+    printf("Send a message from the server to the client...\n");
+    memcpy(buf, server_message, strlen(server_message));
+    ret = PR_Write(s_nspr, buf, strlen(buf));
+    if (ret < 0) {
+        const PRErrorCode err = PR_GetError();
+        fprintf(stderr, "error: PR_Write error %d: %s\n",
+            err, PR_ErrorToName(err));
+        exit(1);
+    }
+
+    ret = PR_Read(c_nspr, buf2, 1024);
+    if (ret < 0) {
+        const PRErrorCode err = PR_GetError();
+        fprintf(stderr, "error: PR_Read error %d: %s\n",
+            err, PR_ErrorToName(err));
+        exit(1);
+    }
+
+    memset(buf, 0, 1024);
+    memcpy(buf, buf2, ret);
+    printf("Received message from client: %s [len: %d]\n", buf, ret);
+
+
 
     // Send close_notify alert.
     if (PR_Shutdown(c_nspr, PR_SHUTDOWN_BOTH) != PR_SUCCESS) {
         const PRErrorCode err = PR_GetError();
-        fprintf(stderr, "error: PR_Read error %d: %s\n",
+        fprintf(stderr, "error: PR_Shutdown error %d: %s\n",
             err, PR_ErrorToName(err));
         exit(1);
     }

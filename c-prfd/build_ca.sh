@@ -6,7 +6,8 @@ set -e
 
 rm nssdb -rf noise.bin *.crt *.csr *.der
 
-echo Secret.123 > password.txt
+# echo Secret.123 > password.txt
+echo > password.txt
 openssl rand -out noise.bin 2048
 mkdir nssdb
 certutil -N -d nssdb -f password.txt
@@ -48,7 +49,7 @@ certutil -R \
  -k rsa \
  -g 2048 \
  -Z SHA256 \
- -s "CN=ca,O=CIPHERBOY" \
+ -s "CN=ca.cipherboy.com,O=CIPHERBOY" \
  --keyUsage critical,dataEncipherment,keyEncipherment,digitalSignature \
  --extKeyUsage serverAuth \
  -o sslserver.csr.der
@@ -74,3 +75,4 @@ echo -e "y\n\n\n\n\n2\n7\n${OCSP}\n\n\n" |
  --keyUsage critical,dataEncipherment,keyEncipherment,digitalSignature \
  --extKeyUsage serverAuth
 
+certutil -d nssdb -A -n ca.cipherboy.com -t u,u,u -a -i sslserver.crt
