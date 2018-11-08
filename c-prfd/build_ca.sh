@@ -16,7 +16,7 @@ certutil -N -d nssdb -f password.txt
 
 openssl rand -out noise.bin 2048
 SKID="0x`openssl rand -hex 20`"
-OCSP="http://$HOSTNAME:8080/ca/ocsp"
+OCSP="http://ca.cipherboy.com:8080/ca/ocsp"
 echo -e "y\n\ny\ny\n${SKID}\n\n\n\n${SKID}\n\n2\n7\n${OCSP}\n\n\n\n" | \
  certutil -S \
  -x \
@@ -60,7 +60,7 @@ openssl req -inform der -in sslserver.csr.der -out sslserver.csr
 # https://www.dogtagpki.org/wiki/Issuing_SSL_Server_Certificate_with_NSS
 
 echo "$SKID - $OCSP"
-echo -e "y\n\ny\ny\n${SKID}\n\n\n\n2\n7\n${OCSP}\n\n\n\n" |
+echo -e "y\n\n\n\n\n2\n7\n${OCSP}\n\n\n" |
  certutil -C \
  -d nssdb \
  -f password.txt \
