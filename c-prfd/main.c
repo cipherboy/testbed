@@ -17,12 +17,12 @@
 #include <sslproto.h>
 
 // Random includes
+#include <errno.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 #include <strings.h>
-#include <errno.h>
 
 #define DEBUG 1
 
@@ -47,12 +47,12 @@ void print_trace(void)
 
 struct PRFilePrivate {
     uint8_t* read_bytes;
-    size_t *read_capacity;
-    size_t *read_ptr;
+    size_t* read_capacity;
+    size_t* read_ptr;
 
     uint8_t* write_bytes;
-    size_t *write_capacity;
-    size_t *write_ptr;
+    size_t* write_capacity;
+    size_t* write_ptr;
 
     bool closed;
 };
@@ -277,7 +277,7 @@ static void freeBufferPRFileDesc(PRFileDesc* fd)
 }
 
 static PRFileDesc* newBufferPRFileDesc(uint8_t* read_buf, size_t* read_capacity, size_t* read_ptr,
-                                       uint8_t* write_buf, size_t* write_capacity, size_t* write_ptr)
+    uint8_t* write_buf, size_t* write_capacity, size_t* write_ptr)
 {
     PRFileDesc* fd;
 
@@ -301,7 +301,7 @@ static PRFileDesc* newBufferPRFileDesc(uint8_t* read_buf, size_t* read_capacity,
     return fd;
 }
 
-int main(int argc, char** argv)
+static void setup_nss_context(void)
 {
     /* Create NSS Context */
     PR_Init(PR_USER_THREAD, PR_PRIORITY_NORMAL, 0);
@@ -314,30 +314,10 @@ int main(int argc, char** argv)
             err, PR_ErrorToName(err));
         exit(1);
     }
+}
 
-    /* Initialize Client Buffers */
-    /* In order to maintain complete control over our buffers, we need to
-     * create our buffers, sizes, and pointers here. This means that the
-     * PRFileDesc does nothing except hold pointers to our memory and update
-     * the contents/values as it sees fit (send/recv). If instead the buffer
-     * took access (or created access itself), we'd need to get access to
-     * them befor giving it to NSS, as NSS wraps our PRFileDesc in one of
-     * their PRFileDescs, removing our access to fd->secret. */
-    size_t c_read_size = 2048;
-    size_t c_read_ptr = 0;
-    uint8_t* c_read_buf = calloc(read_size, sizeof(uint8_t));
-    size_t c_write_size = 2048;
-    size_t c_write_ptr = 0;
-    uint8_t* c_write_buf = calloc(write_size, sizeof(uint8_t));
-
-    PRIntn optval = 1;
-    PRFileDesc* nspr = newBufferPRFileDesc(read_buf, &read_size, &read_ptr,
-                                           write_buf, &write_size, &write_ptr);
-    PRSocketOptionData nonblocking;
-    nonblocking.option = PR_SockOpt_Nonblocking;
-    nonblocking.value.non_blocking = PR_TRUE;
-    PR_SetSocketOption(nspr, &nonblocking);
-
+static void setup_nss_config(void)
+{
     // Ciphers to enable.
     static const PRUint16 good_ciphers[] = {
         TLS_RSA_WITH_AES_128_CBC_SHA,
@@ -383,59 +363,95 @@ int main(int argc, char** argv)
             err, PR_ErrorToName(err));
         exit(1);
     }
+}
 
-    {
-        PRFileDesc* model = PR_NewTCPSocket();
-        PRFileDesc* newfd = SSL_ImportFD(NULL, model);
-        if (newfd == NULL) {
-            const PRErrorCode err = PR_GetError();
-            fprintf(stderr, "error: NSPR error code %d: %s\n",
-                err, PR_ErrorToName(err));
-            exit(1);
-        }
-        model = newfd;
-        newfd = NULL;
-        if (SSL_OptionSet(model, SSL_ENABLE_SSL2, PR_FALSE) != SECSuccess) {
-            const PRErrorCode err = PR_GetError();
-            fprintf(stderr, "error: set SSL_ENABLE_SSL2 error %d: %s\n",
-                err, PR_ErrorToName(err));
-            exit(1);
-        }
-        if (SSL_OptionSet(model, SSL_V2_COMPATIBLE_HELLO, PR_FALSE) != SECSuccess) {
-            const PRErrorCode err = PR_GetError();
-            fprintf(stderr, "error: set SSL_V2_COMPATIBLE_HELLO error %d: %s\n",
-                err, PR_ErrorToName(err));
-            exit(1);
-        }
-        if (SSL_OptionSet(model, SSL_ENABLE_DEFLATE, PR_FALSE) != SECSuccess) {
-            const PRErrorCode err = PR_GetError();
-            fprintf(stderr, "error: set SSL_ENABLE_DEFLATE error %d: %s\n",
-                err, PR_ErrorToName(err));
-            exit(1);
-        }
+static PRFileDesc* setup_nss_client(PRFileDesc* c_nspr)
+{
+    PRSocketOptionData nonblocking;
+    nonblocking.option = PR_SockOpt_Nonblocking;
+    nonblocking.value.non_blocking = PR_TRUE;
+    PR_SetSocketOption(c_nspr, &nonblocking);
 
-        newfd = SSL_ImportFD(model, nspr);
-        PR_SetSocketOption(nspr, &nonblocking);
-
-        if (newfd == NULL) {
-            const PRErrorCode err = PR_GetError();
-            fprintf(stderr, "error: SSL_ImportFD error %d: %s\n",
-                err, PR_ErrorToName(err));
-            exit(1);
-        }
-        nspr = newfd;
-        PR_Close(model);
+    PRFileDesc* model = PR_NewTCPSocket();
+    PRFileDesc* newfd = SSL_ImportFD(NULL, model);
+    if (newfd == NULL) {
+        const PRErrorCode err = PR_GetError();
+        fprintf(stderr, "error: NSPR error code %d: %s\n",
+            err, PR_ErrorToName(err));
+        exit(1);
     }
+
+    model = newfd;
+    newfd = NULL;
+    if (SSL_OptionSet(model, SSL_ENABLE_SSL2, PR_FALSE) != SECSuccess) {
+        const PRErrorCode err = PR_GetError();
+        fprintf(stderr, "error: set SSL_ENABLE_SSL2 error %d: %s\n",
+            err, PR_ErrorToName(err));
+        exit(1);
+    }
+    if (SSL_OptionSet(model, SSL_V2_COMPATIBLE_HELLO, PR_FALSE) != SECSuccess) {
+        const PRErrorCode err = PR_GetError();
+        fprintf(stderr, "error: set SSL_V2_COMPATIBLE_HELLO error %d: %s\n",
+            err, PR_ErrorToName(err));
+        exit(1);
+    }
+    if (SSL_OptionSet(model, SSL_ENABLE_DEFLATE, PR_FALSE) != SECSuccess) {
+        const PRErrorCode err = PR_GetError();
+        fprintf(stderr, "error: set SSL_ENABLE_DEFLATE error %d: %s\n",
+            err, PR_ErrorToName(err));
+        exit(1);
+    }
+
+    newfd = SSL_ImportFD(model, c_nspr);
+    PR_SetSocketOption(c_nspr, &nonblocking);
+
+    if (newfd == NULL) {
+        const PRErrorCode err = PR_GetError();
+        fprintf(stderr, "error: SSL_ImportFD error %d: %s\n",
+            err, PR_ErrorToName(err));
+        exit(1);
+    }
+    c_nspr = newfd;
+    PR_Close(model);
+
+    return c_nspr;
+}
+
+int main(int argc, char** argv)
+{
+    setup_nss_context();
+    setup_nss_config();
+
+    /* Initialize Client Buffers */
+    /* In order to maintain complete control over our buffers, we need to
+     * create our buffers, sizes, and pointers here. This means that the
+     * PRFileDesc does nothing except hold pointers to our memory and update
+     * the contents/values as it sees fit (send/recv). If instead the buffer
+     * took access (or created access itself), we'd need to get access to
+     * them befor giving it to NSS, as NSS wraps our PRFileDesc in one of
+     * their PRFileDescs, removing our access to fd->secret. */
+    size_t c_read_size = 2048;
+    size_t c_read_ptr = 0;
+    uint8_t* c_read_buf = calloc(c_read_size, sizeof(uint8_t));
+    size_t c_write_size = 2048;
+    size_t c_write_ptr = 0;
+    uint8_t* c_write_buf = calloc(c_write_size, sizeof(uint8_t));
+
+    PRIntn optval = 1;
+    PRFileDesc* c_nspr = newBufferPRFileDesc(c_read_buf, &c_read_size, &c_read_ptr,
+        c_write_buf, &c_write_size, &c_write_ptr);
+
+    c_nspr = setup_nss_client(c_nspr);
 
     // Perform the handshake.
     char* host = "buffbuffbuffbuff";
-    if (SSL_ResetHandshake(nspr, PR_FALSE) != SECSuccess) {
+    if (SSL_ResetHandshake(c_nspr, PR_FALSE) != SECSuccess) {
         const PRErrorCode err = PR_GetError();
         fprintf(stderr, "error: SSL_ResetHandshake error %d: %s\n",
             err, PR_ErrorToName(err));
         exit(1);
     }
-    if (SSL_SetURL(nspr, host) != SECSuccess) {
+    if (SSL_SetURL(c_nspr, host) != SECSuccess) {
         const PRErrorCode err = PR_GetError();
         fprintf(stderr, "error: SSL_SetURL error %d: %s\n",
             err, PR_ErrorToName(err));
@@ -446,22 +462,24 @@ int main(int argc, char** argv)
      * complete, but we haven't actually given it any data on the
      * server end of the connection. */
     printf("Trying handshake...\n");
-    if (SSL_ForceHandshake(nspr) != SECSuccess) {
+    if (SSL_ForceHandshake(c_nspr) != SECSuccess) {
         const PRErrorCode err = PR_GetError();
         fprintf(stderr, "error: SSL_ForceHandshake error %d: %s\n",
             err, PR_ErrorToName(err));
-        // exit(1);
+        if (err != PR_WOULD_BLOCK_ERROR) {
+            exit(1);
+        }
     }
 
-/*        fd->secret->read_ptr = 93 + 5;
+    /*        fd->secret->read_ptr = 93 + 5;
         uint8_t fake_hello[21] = { 0x16, 0x03, 0x03, 0x00, 0x5d, 0x20, 0x00,
             0x00, 0x59, 0x03, 0x03, 0x0a, 0xca, 0x21,
             0x58, 0x8b, 0xe2, 0xd9, 0x9e, 0x13, 0x67 };
         memcpy(fd->secret->read_bytes, fake_hello, 21);*/
 
     printf("Writing connection...\n");
-    char *buf = calloc(0, sizeof(char));
-    PRInt32 ret = PR_Write(nspr, buf, 0);
+    char* buf = calloc(0, sizeof(char));
+    PRInt32 ret = PR_Write(c_nspr, buf, 0);
     if (ret < 0) {
         const PRErrorCode err = PR_GetError();
         fprintf(stderr, "error: PR_Write error %d: %s\n",
@@ -469,7 +487,7 @@ int main(int argc, char** argv)
         exit(1);
     }
     printf("Reading connection...\n");
-    ret = PR_Read(nspr, buf, sizeof(buf));
+    ret = PR_Read(c_nspr, buf, sizeof(buf));
     if (ret < 0) {
         const PRErrorCode err = PR_GetError();
         fprintf(stderr, "error: PR_Read error %d: %s\n",
@@ -480,14 +498,14 @@ int main(int argc, char** argv)
     printf("Closing connection...\n");
 
     // Send close_notify alert.
-    if (PR_Shutdown(nspr, PR_SHUTDOWN_BOTH) != PR_SUCCESS) {
+    if (PR_Shutdown(c_nspr, PR_SHUTDOWN_BOTH) != PR_SUCCESS) {
         const PRErrorCode err = PR_GetError();
         fprintf(stderr, "error: PR_Read error %d: %s\n",
             err, PR_ErrorToName(err));
         exit(1);
     }
     // Closes the underlying POSIX file descriptor, too.
-    PR_Close(nspr);
+    PR_Close(c_nspr);
 
     return 0;
 }
