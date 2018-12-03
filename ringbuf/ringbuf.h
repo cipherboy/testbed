@@ -257,7 +257,7 @@ void jb_free(j_buffer* buf) {
 
     free(buf->contents);
 
-    // Safe guards to ensure
+    // Safe guards to ensure we don't try and free buf again.
     buf->contents = NULL;
     buf->capacity = 0;
 
