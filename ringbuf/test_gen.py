@@ -24,7 +24,7 @@ def ab(ssize):
     p("assert(r_o <= w_o);")
     p("assert((r_o < w_o) == jb_can_read(b));")
     p("assert((w_o - r_o) <= " + ssize + ");")
-    p("assert((w_o - r_o) < " + ssize + " == jb_can_write(b));")
+    p("assert(((w_o - r_o) < " + ssize + ") == jb_can_write(b));")
 
 def tp(pc, ssize):
     data_length = 0
@@ -86,11 +86,11 @@ def main():
 
     data_length = 0
 
-    p('#include "ringbuf.h"')
-    p('#include "assert.h"')
-    p('#include "stdio.h"')
+    p('#include "ringbuf.h"', indents=0)
+    p('#include "assert.h"', indents=0)
+    p('#include "stdio.h"', indents=0)
 
-    p("void test_jb(char *d) {", 0)
+    p("void test_jb(uint8_t* d) {", 0)
     p("j_buffer* b = jb_alloc(" + str(size) + ");")
     p("jb_free(b);")
     p("b = jb_alloc(" + str(size) + ");")
@@ -100,7 +100,6 @@ def main():
     p()
     p("int i_r = 0;")
     p("size_t s_r = 0;")
-    p("uint8_t u_r = 0;")
     p("uint8_t* r_b = calloc(" + str(size + 5) + ", sizeof(uint8_t));")
     p()
 
@@ -166,7 +165,7 @@ def main():
     e(data_length)
     data_count = (data_length//26)+1
     data = (alphabet * data_count)[0:data_length+1]
-    p("char* d = \"" + data + "\";")
+    p("uint8_t* d = (uint8_t*)\"" + data + "\";")
     p("test_jb(d);")
     p("return 0;")
     p("}", indents=0)
