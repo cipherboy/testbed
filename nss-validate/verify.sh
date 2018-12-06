@@ -33,7 +33,23 @@ for arg in "$@"; do
             certutil -M -d $nssdb -n "CA Sub" -t "CT,CT,CT"
             echo "Result of upgrading: $?"
         fi
-    elif [ "x$arg" == "xa" ] || [ "x$arg" == "xb" ] || [ "x$arg" == "xc" ]; then
+    elif [ "x$arg" == "xcsub" ]; then
+        echo "Adding compromised sub"
+        certutil -A -d $nssdb -n "Compromised Sub" -t "w,w,w" -a -i compromised_sub.crt
+        echo "Result of addition: $?"
+        echo ""
+        echo "Verifying compromised sub:"
+        certutil -V -d $nssdb -n "Compromised Sub" -u "C"
+        ret=$?
+        echo "Result of verification: $ret"
+        if [ "$ret" == "0" ]; then
+            echo ""
+            echo "Upgrading trust to trusted"
+            certutil -M -d $nssdb -n "Compromised Sub" -t "CT,CT,CT"
+            echo "Result of upgrading: $?"
+        fi
+    elif [ "x$arg" == "xa" ] || [ "x$arg" == "xb" ] || [ "x$arg" == "xc" ] ||
+         [ "x$arg" == "xd" ] || [ "x$arg" == "xe" ] ; then
         echo "Adding sslserver-$arg"
         certutil -A -d "$nssdb" -n "$arg.cipherboy.com" -t "w,w,w" -a -i "sslserver-${arg}.crt"
         echo "Result of addition: $?"
@@ -60,4 +76,3 @@ echo "Listing NSSDB contents"
 
 certutil -L -d $nssdb || true
 certutil -K -d $nssdb || true
-

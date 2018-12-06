@@ -26,7 +26,10 @@ certutil -N -d $nssdb -f password.txt
 ## A service key -- signed by the root -- "a.cipherboy.com"
 ## A second service key -- signed by the sub key -- "b.cipherboy.com"
 ## A random key -- not signed by the root -- "c.cipherboy.com"
-## A second random key -- signed by the first random key -- "d.cipherboy.com"
+## A Compromised Root CA -- not trusted -- "Compromised Root"
+## A Compromised Sub CA -- signed by Compromised Root -- "Compromised Sub"
+## A fourth service key -- signed by Compromised Root -- "d.hacked.com"
+## A fifth service key -- signed by Compromised Sub -- "e.hacked.com"
 ##
 ## Of these, only the Root CA is directly trusted.
 ## The sub-key is trusted by virtue of the Root CA being trusted
@@ -188,7 +191,7 @@ echo -e "y\n\n\n\n\n2\n7\n${OCSP}\n\n\n\n" | \
  -f password.txt \
  -z noise.bin \
  -n "c.cipherboy.com" \
- -s "CN=b.cipherboy.com,O=CIPHERBOY" \
+ -s "CN=c.cipherboy.com,O=CIPHERBOY" \
  -t "u,u,u" \
  -m $RANDOM \
  -k rsa \
@@ -203,6 +206,151 @@ certutil -L -d $nssdb -n "c.cipherboy.com" -a > sslserver-c.crt
 
 
 
+# Create Compromised CA Root
+# https://www.dogtagpki.org/wiki/Creating_Self-Signed_CA_Signing_Certificate_with_NSS
+
+# Generate noise for faster certificate generation
+openssl rand -out noise.bin 4096
+
+echo -e "y\n\ny\ny\n${SKID}\n\n\n\n${SKID}\n\n2\n7\n${OCSP}\n\n\n\n" | \
+ certutil -S \
+ -x \
+ -d $nssdb \
+ -f password.txt \
+ -z noise.bin \
+ -n "Compromised Root" \
+ -s "CN=Compromised Root Certificate,OU=pki-tomcat,O=HACKED" \
+ -t "CTu,Cu,Cu" \
+ -m $RANDOM \
+ -k rsa \
+ -g 4096 \
+ -Z SHA256 \
+ -2 \
+ -3 \
+ --keyUsage critical,certSigning,crlSigning,digitalSignature,nonRepudiation \
+ --extAIA \
+ --extSKID
+certutil -L -d $nssdb -n "Compromised Root" -a > compromised_root.crt
+
+
+# Create Compromised CA Sub
+
+# Generate noise for faster certificate generation
+openssl rand -out noise.bin 4096
+
+echo -e "${SKID}\ny\n2\n7\n\n\n\n" |
+ certutil -R \
+ -d $nssdb \
+ -f password.txt \
+ -z noise.bin \
+ -k rsa \
+ -g 4096 \
+ -Z SHA256 \
+ -n "Compromised Sub" \
+ -s "CN=Compromised Sub Certificate,OU=pki-tomcat,O=HACKED" \
+ -o compromised_sub.csr.der
+openssl req -inform der -in compromised_sub.csr.der -out compromised_sub.csr
+
+# Sign CA Sub
+
+echo -e "y\n\n\n\n\n\n\n2\n7\n${OCSP}\n\n\n" |
+ certutil -C \
+ -d $nssdb \
+ -f password.txt \
+ -m $RANDOM \
+ -a \
+ -i compromised_sub.csr \
+ -o compromised_sub.crt \
+ -c "Compromised Root" \
+ -3 \
+ --extAIA \
+ --keyUsage critical,certSigning,crlSigning,digitalSignature,nonRepudiation \
+ --extAIA \
+ --extSKID
+
+# Import CA Sub
+certutil -d $nssdb -A -n "Compromised Sub" -t "CTu,Cu,Cu" -a -i compromised_sub.crt
+
+
+# Create Server Key A (signed by Root)
+
+# Generate noise for faster certificate generation
+openssl rand -out noise.bin 4096
+
+certutil -R \
+ -d $nssdb \
+ -f password.txt \
+ -z noise.bin \
+ -k rsa \
+ -g 4096 \
+ -Z SHA256 \
+ -s "CN=d.hacked.com,O=HACKED" \
+ --keyUsage critical,dataEncipherment,keyEncipherment,digitalSignature \
+ --extKeyUsage serverAuth \
+ -o sslserver-d.csr.der
+openssl req -inform der -in sslserver-d.csr.der -out sslserver-d.csr
+
+# Sign server key
+echo -e "y\n\n\n\n\n2\n7\n${OCSP}\n\n\n" |
+ certutil -C \
+ -d $nssdb \
+ -f password.txt \
+ -m $RANDOM \
+ -a \
+ -i sslserver-d.csr \
+ -o sslserver-d.crt \
+ -c "Compromised Root" \
+ -3 \
+ --extAIA \
+ --keyUsage critical,dataEncipherment,keyEncipherment,digitalSignature \
+ --extKeyUsage serverAuth
+
+# Import server key into NSS DB
+certutil -d $nssdb -A -n d.hacked.com -t u,u,u -a -i sslserver-d.crt
+
+
+
+# Create Server Key B (signed by Root)
+
+# Generate noise for faster certificate generation
+openssl rand -out noise.bin 4096
+
+certutil -R \
+ -d $nssdb \
+ -f password.txt \
+ -z noise.bin \
+ -k rsa \
+ -g 4096 \
+ -Z SHA256 \
+ -s "CN=e.hacked.com,O=HACKED" \
+ --keyUsage critical,dataEncipherment,keyEncipherment,digitalSignature \
+ --extKeyUsage serverAuth \
+ -o sslserver-e.csr.der
+openssl req -inform der -in sslserver-e.csr.der -out sslserver-e.csr
+
+# Sign server key
+echo -e "y\n\n\n\n\n2\n7\n${OCSP}\n\n\n" |
+ certutil -C \
+ -d $nssdb \
+ -f password.txt \
+ -m $RANDOM \
+ -a \
+ -i sslserver-e.csr \
+ -o sslserver-e.crt \
+ -c "Compromised Sub" \
+ -3 \
+ --extAIA \
+ --keyUsage critical,dataEncipherment,keyEncipherment,digitalSignature \
+ --extKeyUsage serverAuth
+
+# Import server key into NSS DB
+certutil -d $nssdb -A -n e.hacked.com -t u,u,u -a -i sslserver-e.crt
+
+
+
+
+
+
 echo ""
 echo ""
 echo ""
@@ -210,3 +358,9 @@ echo "Listing NSSDB contents"
 
 certutil -L -d $nssdb
 certutil -K -d $nssdb
+
+cat sslserver-a.crt > joint-a.crt
+cat ca_sub.crt sslserver-b.crt > joint-b.crt
+cat sslserver-c.crt > joint-c.crt
+cat sslserver-d.crt > joint-d.crt
+cat compromised_cub.crt sslserver-e.crt > joint-e.crt
