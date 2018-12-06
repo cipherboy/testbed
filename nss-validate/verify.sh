@@ -20,11 +20,11 @@ for arg in "$@"; do
         # We assume the root is trusted; so don't validate it.
     elif [ "x$arg" == "xsub" ]; then
         echo "Adding sub"
-        certutil -A -d $nssdb -n "CA Sub" -t "w,w,w" -a -i ca_sub.crt
+        certutil -A -d $nssdb -n "CA Sub" -t "cw,cw,cw" -a -i ca_sub.crt
         echo "Result of addition: $?"
         echo ""
         echo "Verifying sub:"
-        certutil -V -d $nssdb -n "CA Sub" -u "C"
+        certutil -V -d $nssdb -n "CA Sub" -e -u "L"
         ret=$?
         echo "Result of verification: $ret"
         if [ "$ret" == "0" ]; then
@@ -39,7 +39,7 @@ for arg in "$@"; do
         echo "Result of addition: $?"
         echo ""
         echo "Verifying compromised sub:"
-        certutil -V -d $nssdb -n "Compromised Sub" -u "C"
+        certutil -V -d $nssdb -n "Compromised Sub" -e -u "V"
         ret=$?
         echo "Result of verification: $ret"
         if [ "$ret" == "0" ]; then
@@ -55,7 +55,7 @@ for arg in "$@"; do
         echo "Result of addition: $?"
         echo ""
         echo "Verifying sslserver-$arg"
-        certutil -V -d $nssdb -n "$arg.cipherboy.com" -u "V"
+        certutil -V -d $nssdb -n "$arg.cipherboy.com" -e -u "V"
         ret=$?
         echo "Result of verification: $ret"
         if [ "$ret" == "0" ]; then
