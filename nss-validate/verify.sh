@@ -35,11 +35,11 @@ for arg in "$@"; do
         fi
     elif [ "x$arg" == "xcsub" ]; then
         echo "Adding compromised sub"
-        certutil -A -d $nssdb -n "Compromised Sub" -t "w,w,w" -a -i compromised_sub.crt
+        certutil -A -d $nssdb -n "Compromised Sub" -t "cw,cw,cw" -a -i compromised_sub.crt
         echo "Result of addition: $?"
         echo ""
         echo "Verifying compromised sub:"
-        certutil -V -d $nssdb -n "Compromised Sub" -e -u "V"
+        certutil -V -d $nssdb -n "Compromised Sub" -e -u "L"
         ret=$?
         echo "Result of verification: $ret"
         if [ "$ret" == "0" ]; then
