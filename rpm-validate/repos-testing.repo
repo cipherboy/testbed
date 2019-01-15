@@ -1,0 +1,5 @@
+[testing]
+gpgcheck=1
+baseurl=file:///repos/testing
+enabled=1
+gpgkey=file:///repos/testing/valid.gpg

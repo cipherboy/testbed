@@ -1,0 +1,9 @@
+This file is version 4 of the rpmtestbase package.
+
+The versions are as follows:
+
+ - v1: valid package
+ - v2: unsigned update
+ - v3: signed update with wrong key
+ - v4: signed update with correct key, bad signature
+ - v5: valid package update
