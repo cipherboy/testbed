@@ -102,24 +102,28 @@ function vti() {
         return 0
     }
 
-    ## If the temporary directory exists, remove it.
+    ## rm_secure_temp removes the temporary directory if present.
     function __rm_secure_temp() {
         if [ -d "$TMPBASE" ]; then
+            # TODO: Determine if we should shred the contents if the shred
+            # utility is present; otherwise, could fall back on dd...
             rm -rf "$TMPBASE"
         fi
     }
 
+    # __e prints error messages.
     function __e() {
         echo "e:" "$@" 1>&2
     }
 
+    # __v prints debug messages in verbose mode.
     function __v() {
         if [ "x$VERBOSE" != "x" ]; then
             echo "v:" "$@" 1>&2
         fi
     }
 
-    ## [ core functions ] ##
+    ## [ core commands ] ##
 
     function _parse_args() {
         # Use a read-and-shift approach to parse both "<option>" and
@@ -185,6 +189,7 @@ function vti() {
         return 0
     }
 
+    # Show help and usage information.
     function _print_help() {
         if (( $1 != 0 )); then
             echo ""
@@ -207,20 +212,35 @@ function vti() {
         echo ""
         echo "Environment variables:"
         echo "TMPDIR: specify a location to place a temporary directory"
+        echo "VERBOSE: see certutil commands being run"
         echo ""
         echo "For more information about these options, refer to the" \
              "certutil documentation."
     }
 
-    function _copy_temp() {
-        local cert_temp="$TMPBASE/cert"
-        NSSDB_TEMP="$TMPBASE/nssdb"
+    # Copy NSS DB and Certificate to temporary location.
+    function _copy_to_temp() {
+        local ret=0
 
+        NSSDB_TEMP="$TMPBASE/nssdb"
         cp -r "$NSSDB" "$NSSDB_TEMP"
+        ret=$?
+        if (( ret != 0 )); then
+            __e "Copying $NSSDB to temporary directory failed: $ret"
+            exit 1
+        fi
+
+        local cert_temp="$TMPBASE/cert"
         cp "$CERT_PATH" "$cert_temp"
+        ret=$?
+        if (( ret != 0 )); then
+            __e "Copying $CERT_PATH to temporary directory failed: $ret"
+            exit 1
+        fi
         CERT_PATH="$cert_temp"
     }
 
+    # Import a certificate into the NSS DB specified on $1.
     function _import_cert() {
         local database="$1"
         local ret=0
@@ -238,6 +258,9 @@ function vti() {
         if [ "x$HSM_TOKEN" != "x" ]; then
             add_args+=("-h" "$HSM_TOKEN")
         fi
+        if [ "x$NSSDB_PASSWORD" != "x" ]; then
+            common_args+=("-f" "$NSSDB_PASSWORD")
+        fi
         modify_args+=("-t" "$CERT_TRUST")
 
         __v certutil "${add_args[@]}" "${common_args[@]}"
@@ -245,7 +268,7 @@ function vti() {
         ret=$?
         if (( ret != 0 )); then
             __e "certutil returned non-zero value: $ret"
-            __e "Unable to import certificate to NSS DB: $NSS_DB."
+            __e "Unable to import certificate to NSS DB: $NSSDB."
             exit $ret
         fi
 
@@ -254,11 +277,12 @@ function vti() {
         ret=$?
         if (( ret != 0 )); then
             __e "certutil returned non-zero value: $ret"
-            __e "Unable to modify certificate trust in NSS DB: $NSS_DB."
+            __e "Unable to modify certificate trust in NSS DB: $NSSDB."
             exit $ret
         fi
     }
 
+    # Verify the certificate in the NSS DB specified by $1.
     function _verify_cert() {
         local database="$1"
         local ret=0
@@ -270,11 +294,15 @@ function vti() {
         if [ "x$HSM_TOKEN" != "x" ]; then
             verify_args+=("-h" "$HSM_TOKEN")
         fi
+        if [ "x$NSSDB_PASSWORD" != "x" ]; then
+            verify_args+=("-f" "$NSSDB_PASSWORD")
+        fi
 
         __v certutil "${verify_args[@]}"
         certutil "${verify_args[@]}"
     }
 
+    # Remove the certificate from the NSS DB specified by $1.
     function _remove_cert() {
         local database="$1"
         local remove_args=("-D")
@@ -285,6 +313,9 @@ function vti() {
             # If the certificate was processed on an HSM, specify the HSM for
             # removal as well so we delete it off the HSM as well.
             remove_args+=("-h" "$HSM_TOKEN")
+        fi
+        if [ "x$NSSDB_PASSWORD" != "x" ]; then
+            remove_args+=("-f" "$NSSDB_PASSWORD")
         fi
 
         __v certutil "${remove_args[@]}"
@@ -300,7 +331,7 @@ function vti() {
     ## [ program flow ] ##
     local ret=0
 
-    # Loosely, the flow for this script is:
+    # The flow for this script is:
     #
     # - Parse arguments
     #   - [print help if required]
@@ -312,6 +343,9 @@ function vti() {
     #   - [on failure, quit]
     # - Import certificate into real NSS DB
     # - Modify trust flags on real NSS DB
+    #
+    # Import and Modify are both handled by _import_cert, verification is
+    # handled by _verify_cert, and removal is handled by _remove_cert.
 
     _parse_args "$@"
     ret="$?"
@@ -321,11 +355,16 @@ function vti() {
     fi
 
     __mk_secure_tmp
-    _copy_temp
+    _copy_to_temp
 
     _import_cert "$NSSDB_TEMP"
     _verify_cert "$NSSDB_TEMP"
     ret=$?
+
+    # Note that we always have to remove the certificate from the temporary
+    # NSS DB--even when import succeeded. Otherwise, if we're using a HSM,
+    # the certificate will fail to be imported into the real NSS DB because
+    # it already exists on the HSM.
     _remove_cert "$NSSDB_TEMP"
 
     # Check if the verification failed.
@@ -335,6 +374,8 @@ function vti() {
         exit 1
     fi
 
+    # Since verification succeeded, we can now import the certificate into
+    # the real NSS Database.
     _import_cert "$NSSDB"
     __rm_secure_temp
 }
