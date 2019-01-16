@@ -41,6 +41,9 @@ function PKICertImport() {
     # Location of the original NSS DB.
     local NSSDB=""
 
+    # Type of the NSSDB.
+    local NSSDB_TYPE=""
+
     # Location of the copied NSS DB.
     local NSSDB_TEMP=""
 
@@ -92,9 +95,9 @@ function PKICertImport() {
 
         if (( ret != 0 )); then
             # ret being non-zero is a definite failure in mktemp.
-            echo "Return from mktemp was non-zero: $ret" 1>&2
-            echo "$TMPBASE" 1>&2
-            echo "Perhaps specify TMPDIR in the environment?" 1>&2
+            __e "Return from mktemp was non-zero: $ret" 1>&2
+            __e "$TMPBASE" 1>&2
+            __e "Perhaps specify TMPDIR in the environment?" 1>&2
             exit 1
         elif [ ! -d "$TMPBASE" ]; then
             # Theoretically mktemp should exit with zero status only when
@@ -103,9 +106,9 @@ function PKICertImport() {
             # include a warning, causing TMPBASE to not be a valid directory.
 
             # This ensures we don't continue if that is the case.
-            echo "Return from mktemp was zero but invalid directory:" 1>&2
-            echo "$TMPBASE" 1>&2
-            echo "Perhaps specify TMPDIR in the environment?" 1>&2
+            __e "Return from mktemp was zero but invalid directory:" 1>&2
+            __e "$TMPBASE" 1>&2
+            __e "Perhaps specify TMPDIR in the environment?" 1>&2
             exit 1
         fi
 
@@ -122,9 +125,9 @@ function PKICertImport() {
         user="$(id --user --name 2>&1)"
         ret=$?
         if (( ret != 0 )); then
-            echo "id exited with non-zero result: $ret" 1>&2
-            echo "Unable to get current user's name." 1>&2
-            ___rm_secure_tmp
+            __e "id exited with non-zero result: $ret" 1>&2
+            __e "Unable to get current user's name." 1>&2
+            __rm_secure_tmp
             exit 1
         fi
 
@@ -132,9 +135,9 @@ function PKICertImport() {
         group="$(id --group --name 2>&1)"
         ret=$?
         if (( ret != 0 )); then
-            echo "id exited with non-zero result: $ret" 1>&2
-            echo "Unable to get current user's name." 1>&2
-            ___rm_secure_tmp
+            __e "id exited with non-zero result: $ret" 1>&2
+            __e "Unable to get current user's name." 1>&2
+            __rm_secure_tmp
             exit 1
         fi
 
@@ -143,8 +146,8 @@ function PKICertImport() {
         chown "$user:$group" -R "$TMPBASE"
         ret=$?
         if (( ret != 0 )); then
-            echo "Return from chown on $TMPBASE was non-zero: $ret" 1>&2
-            ___rm_secure_tmp
+            __e "Return from chown on $TMPBASE was non-zero: $ret" 1>&2
+            __rm_secure_tmp
             exit 1
         fi
 
@@ -153,8 +156,8 @@ function PKICertImport() {
         chmod 700 -R "$TMPBASE"
         ret=$?
         if (( ret != 0 )); then
-            echo "Return from chmod on $TMPBASE was non-zero: $ret" 1>&2
-            ___rm_secure_tmp
+            __e "Return from chmod on $TMPBASE was non-zero: $ret" 1>&2
+            __rm_secure_tmp
             exit 1
         fi
 
@@ -190,8 +193,21 @@ function PKICertImport() {
                 # imported.
                 CERT_ASCII="true"
             elif [ "x$arg" == "x--database" ] || [ "x$arg" == "x-d" ]; then
-                # Always required; path to the original NSS DB.
+                # Always required; path to the original NSS DB. Note that this
+                # differs from certutil in that we detect the NSSDB type here,
+                # versus taking a prefix:path combination.
                 NSSDB="$1"
+
+                if [ -e "$NSSDB/cert8.db" ] && [ ! -e "$NSSDB/cert9.db" ]; then
+                    NSSDB_TYPE="dbm:"
+                elif [ ! -e "$NSSDB/cert8.db" ] && [ -e "$NSSDB/cert9.db" ]; then
+                    NSSDB_TYPE="sql:"
+                else
+                    __e "Unknown NSS DB type for directory: $NSSDB"
+                    __e "Please ensure only one of cert8.db or cert9.db exist"
+                    return 1
+                fi
+
                 shift
             elif [ "x$arg" == "x--password" ] || [ "x$arg" == "x-f" ]; then
                 # If specified, path to a file containing the NSS DB password.
@@ -302,55 +318,40 @@ function PKICertImport() {
         CERT_PATH="$cert_temp"
     }
 
-    # Import a certificate into the NSS DB specified on $1. Note that we run
-    # two certutil commands: `certutil -A` and `certutil -M`. This correctly
-    # handles the HSM case, where HSM tokens do not understand all NSS trust
-    # flags; instead, store them only in the NSS DB. Failures are fatal; uses
-    # exit instead of return for simplified error handling.
+    # Import a certificate into the NSS DB specified on $1. When a HSM is
+    # specified and the database is a newer, sqlite format, we run two
+    # commands: one for importing the certificate into the HSM, and one for
+    # setting trust in the NSS DB. Otherwise, we use a single command and
+    # hope the trust flags are adequate for validation and suitable for
+    # import (in the case of a HSM with an older NSS DB format). Errors are
+    # fatal; uses exit instead of return.
     function _import_cert() {
         local database="$1"
         local ret=0
-        local common_args=()
         local add_args=("-A")
-        local modify_args=("-M")
 
-        # Options which are common to `certutil -A` and `certutil -M`.
-        common_args+=("-d" "$database")
-        common_args+=("-n" "$CERT_NICKNAME")
+        # Use a single import command, setting trust as we import.
+        add_args+=("-d" "$NSSDB_TYPE$database")
+        add_args+=("-n" "$CERT_NICKNAME")
         if [ "x$NSSDB_PASSWORD" != "x" ]; then
-            common_args+=("-f" "$NSSDB_PASSWORD")
+            add_args+=("-f" "$NSSDB_PASSWORD")
         fi
-
-        # Options which only are required for `certutil -A`.
         add_args+=("-i" "$CERT_PATH")
-        add_args+=("-t" ",,")
         if [ "$CERT_ASCII" == "true" ]; then
             add_args+=("-a")
         fi
         if [ "x$HSM_TOKEN" != "x" ]; then
             add_args+=("-h" "$HSM_TOKEN")
         fi
-
-        # Options which are only required for `certutil -M`.
-        modify_args+=("-t" "$CERT_TRUST")
+        add_args+=("-t" "$CERT_TRUST")
 
         # Import the certificate...
-        __v certutil "${add_args[@]}" "${common_args[@]}"
-        certutil "${add_args[@]}" "${common_args[@]}"
+        __v certutil "${add_args[@]}"
+        certutil "${add_args[@]}"
         ret=$?
         if (( ret != 0 )); then
             __e "certutil returned non-zero value: $ret"
             __e "Unable to import certificate to NSS DB: $NSSDB."
-            exit $ret
-        fi
-
-        # Modify the trust flags on the certificate...
-        __v certutil "${modify_args[@]}" "${common_args[@]}"
-        certutil "${modify_args[@]}" "${common_args[@]}"
-        ret=$?
-        if (( ret != 0 )); then
-            __e "certutil returned non-zero value: $ret"
-            __e "Unable to modify certificate trust in NSS DB: $NSSDB."
             exit $ret
         fi
     }
@@ -361,7 +362,7 @@ function PKICertImport() {
         local ret=0
         local verify_args=("-V")
 
-        verify_args+=("-d" "$database")
+        verify_args+=("-d" "$NSSDB_TYPE$database")
         verify_args+=("-n" "$CERT_NICKNAME")
         verify_args+=("-u" "$CERT_USAGE")
         if [ "x$HSM_TOKEN" != "x" ]; then
@@ -379,7 +380,16 @@ function PKICertImport() {
         # `certutil -V` returns with non-zero value, so _verify_cert will
         # as well.
         __v certutil "${verify_args[@]}"
-        certutil "${verify_args[@]}"
+        local certutil_result="$(certutil "${verify_args[@]}" 2>&1)"
+
+        grep -q '^certutil: certificate is valid$' <<< "$certutil_result"
+        ret=$?
+
+        if (( ret != 0 )); then
+            __e "$certutil_result" 1>&2
+        fi
+
+        return $ret
     }
 
     # Remove the certificate from the NSS DB specified by $1. Errors are fatal;
@@ -388,24 +398,32 @@ function PKICertImport() {
         local database="$1"
         local remove_args=("-D")
 
-        remove_args+=("-d" "$database")
-        remove_args+=("-n" "$CERT_NICKNAME")
-        if [ "x$HSM_TOKEN" != "x" ]; then
-            # If the certificate was processed on an HSM, specify the HSM for
-            # removal as well so we delete it off the HSM as well.
-            remove_args+=("-h" "$HSM_TOKEN")
-        fi
+        remove_args+=("-d" "$NSSDB_TYPE$database")
         if [ "x$NSSDB_PASSWORD" != "x" ]; then
             remove_args+=("-f" "$NSSDB_PASSWORD")
         fi
 
-        __v certutil "${remove_args[@]}"
-        certutil "${remove_args[@]}"
+        __v certutil "${remove_args[@]}" "-n" "$CERT_NICKNAME"
+        certutil "${remove_args[@]}" "-n" "$CERT_NICKNAME"
         local ret=$?
         if (( ret != 0 )); then
             __e "certutil returned non-zero result: $ret"
             __e "Unable to delete certificate!"
             exit $?
+        fi
+
+        if [ "x$HSM_TOKEN" != "x" ]; then
+            # In the event we have a HSM, we also have to remove it from the
+            # HSM token.
+
+            __v certutil "${remove_args[@]}" "-n" "$HSM_TOKEN:$CERT_NICKNAME"
+            certutil "${remove_args[@]}" "-n" "$HSM_TOKEN:$CERT_NICKNAME"
+            local ret=$?
+            if (( ret != 0 )); then
+                __e "certutil returned non-zero result: $ret"
+                __e "Unable to delete certificate!"
+                exit $?
+            fi
         fi
     }
 
