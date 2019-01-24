@@ -40,9 +40,6 @@ function PKICertImport() {
     # Type of the NSSDB.
     local NSSDB_TYPE=""
 
-    # Location of the copied NSS DB.
-    local NSSDB_TEMP=""
-
     # Location to the NSS DB Password file, if present.
     local NSSDB_PASSWORD=""
 
@@ -243,12 +240,13 @@ function PKICertImport() {
         # Ensures that the signature is checked as well.
         verify_args+=("-e")
 
-        # Validate the certificate. Note that _verify_cert returns with status
-        # equal to the return code of the certutil command; on failure,
-        # `certutil -V` returns with non-zero value, so _verify_cert will
-        # as well.
+        # Validate the certificate. Note that we have to pattern match on the
+        # output of certutil -V; the return code is uncorrelated with the
+        # actual result. (It is dependent upon whether or not a HSM is used).
         __v certutil "${verify_args[@]}"
-        local certutil_result="$(certutil "${verify_args[@]}" 2>&1)"
+
+        local certutil_result=""
+        certutil_result="$(certutil "${verify_args[@]}" 2>&1)"
 
         grep -q '^certutil: certificate is valid$' <<< "$certutil_result"
         ret=$?
