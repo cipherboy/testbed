@@ -2,8 +2,7 @@
 import java.net.InetAddress;
 
 import org.mozilla.jss.*;
-import org.mozilla.jss.CryptoManager;
-import org.mozilla.jss.ssl.SSLSocket;
+import org.mozilla.jss.ssl.*;
 
 public class TriggerClientHello {
     public static void main(String[] args) throws Exception {
