@@ -30,11 +30,21 @@ function PKICertImport() {
     # Whether or not the certificate is in ASCII/PEM format.
     local CERT_ASCII="false"
 
+    # Wehther or not the certificate is in PKCS12 format.
+    local CERT_PKCS12="false"
+
     # What trust flags to use when importing the certificate.
     local CERT_TRUST=""
 
     # What usage flags to validate the certificate against.
     local CERT_USAGE=""
+
+    # Password for PKCS12 certificate store.
+    local PKCS12_PASSWORD=""
+
+    # Whether or not to validate the entire chain from a .p12 file, or just
+    # the leaf certificate.
+    local PKCS12_CHAIN="false"
 
     # Location of the original NSS DB.
     local NSSDB=""
@@ -83,6 +93,9 @@ function PKICertImport() {
                 # If specified, the -a flag is passed when the certificate is
                 # imported.
                 CERT_ASCII="true"
+            elif [ "x$arg" == "x--chain" ] || [ "x$arg" == "x-c" ]; then
+                # If specified, validate the entire PKCS12 chain.
+                PKCS12_CHAIN="true"
             elif [ "x$arg" == "x--database" ] || [ "x$arg" == "x-d" ]; then
                 # Always required; path to the original NSS DB. Note that this
                 # differs from certutil in that we detect the NSSDB type here,
@@ -116,6 +129,9 @@ function PKICertImport() {
                 # Always required; nickname for the certificate.
                 CERT_NICKNAME="$1"
                 shift
+            elif [ "x$arg" == "x--pkcs12" ] || [ "x$arg" == "x-p" ]; then
+                # If specified, the certificate file is in pkcs12 format.
+                CERT_PKCS12="true"
             elif [ "x$arg" == "x--trust" ] || [ "x$arg" == "x-t" ]; then
                 # Always required; certificate trust flags.
                 CERT_TRUST="$1"
@@ -124,6 +140,12 @@ function PKICertImport() {
                 # Always required; certificate usage flags.
                 CERT_USAGE="$1"
                 shift
+            elif [ "x$arg" == "x--pkcs12-password" ] || [ "x$arg" == "x-w" ]; then
+                # If specified, password for the .p12 file.
+                PKCS12_PASSWORD="$1"
+                shift
+            elif [ "x$arg" == "x--help" ] || [ "x$arg" == "xhelp" ]; then
+                return 2
             else
                 # We print help whenever the return code is 1, so we don't
                 # need to explicitly parse a --help flag, but we will get
@@ -151,6 +173,15 @@ function PKICertImport() {
         elif [ "x$CERT_USAGE" == "x" ]; then
             __e "Missing certificate usage: specify --usage/-u"
             return 1
+        elif [ "$CERT_ASCII" == "true" ] && [ "$CERT_PKCS12" == "true" ]; then
+            __e "Can't specify both --ascii/-a and --pkcs12/-p"
+            return 1
+        elif [ "$CERT_PKCS12" == "false" ] && [ "$PKCS12_PASSWORD" != "" ]; then
+            __e "Can't specify --pkcs12-password/-w without --pkcs12/-p"
+            return 1
+        elif [ "$CERT_PKCS12" == "false" ] && [ "$PKCS12_CHAIN" != "" ]; then
+            __e "Can't specify --chain/-c without --pkcs12/-p"
+            return 1
         fi
 
         # All good to go.
@@ -159,7 +190,7 @@ function PKICertImport() {
 
     # Show help and usage information.
     function _print_help() {
-        if (( $1 != 0 )); then
+        if (( $1 == 1 )); then
             echo ""
         fi
 
@@ -175,7 +206,10 @@ function PKICertImport() {
         echo ""
         echo "Optional arguments:"
         echo "--ascii, -a: the certificate is in ASCII encoded"
+        echo "--chain, -c: check the entire PKCS12 chain; requires --pkcs12"
         echo "--password, -f <path>: password file for the NSS DB"
+        echo "--pkcs12, -p: the certificate is a .p12/PKCS12 file"
+        echo "--pkcs12-password, -w: password file for the .p12 file; requires --pkcs12"
         echo "--hsm, -h <name>: name of the HSM to use"
         echo ""
         echo "Environment variables:"
@@ -188,13 +222,15 @@ function PKICertImport() {
     # Import a certificate into the NSS DB specified on $1. Errors are fatal;
     # uses exit instead of return.
     function _import_cert() {
-        local database="$1"
+        local nickname="$1"
+        local trust="$2"
+
         local ret=0
         local add_args=("-A")
 
         # Use a single import command, setting trust as we import.
-        add_args+=("-d" "$NSSDB_TYPE$database")
-        add_args+=("-n" "$CERT_NICKNAME")
+        add_args+=("-d" "$NSSDB_TYPE$NSSDB")
+        add_args+=("-n" "$nickname")
         if [ "x$NSSDB_PASSWORD" != "x" ]; then
             add_args+=("-f" "$NSSDB_PASSWORD")
         fi
@@ -205,7 +241,7 @@ function PKICertImport() {
         if [ "x$HSM_TOKEN" != "x" ]; then
             add_args+=("-h" "$HSM_TOKEN")
         fi
-        add_args+=("-t" "$CERT_TRUST")
+        add_args+=("-t" "$trust")
 
         # Import the certificate...
         __v certutil "${add_args[@]}"
@@ -220,13 +256,15 @@ function PKICertImport() {
 
     # Verify the certificate in the NSS DB specified by $1.
     function _verify_cert() {
-        local database="$1"
+        local nickname="$1"
+        local usage="$2"
+
         local ret=0
         local verify_args=("-V")
 
-        verify_args+=("-d" "$NSSDB_TYPE$database")
-        verify_args+=("-n" "$CERT_NICKNAME")
-        verify_args+=("-u" "$CERT_USAGE")
+        verify_args+=("-d" "$NSSDB_TYPE$NSSDB")
+        verify_args+=("-n" "$nickname")
+        verify_args+=("-u" "$usage")
         if [ "x$HSM_TOKEN" != "x" ]; then
             verify_args+=("-h" "$HSM_TOKEN")
         fi
@@ -258,16 +296,16 @@ function PKICertImport() {
     # Remove the certificate from the NSS DB specified by $1. Errors are fatal;
     # uses exit instead of return.
     function _remove_cert() {
-        local database="$1"
+        local nickname="$1"
         local remove_args=("-D")
 
-        remove_args+=("-d" "$NSSDB_TYPE$database")
+        remove_args+=("-d" "$NSSDB_TYPE$NSSDB")
         if [ "x$NSSDB_PASSWORD" != "x" ]; then
             remove_args+=("-f" "$NSSDB_PASSWORD")
         fi
 
-        __v certutil "${remove_args[@]}" "-n" "$CERT_NICKNAME"
-        certutil "${remove_args[@]}" "-n" "$CERT_NICKNAME"
+        __v certutil "${remove_args[@]}" "-n" "$nickname"
+        certutil "${remove_args[@]}" "-n" "$nickname"
         local ret=$?
         if (( ret != 0 )); then
             __e "certutil returned non-zero result: $ret"
@@ -279,8 +317,8 @@ function PKICertImport() {
             # In the event we have a HSM, we also have to remove it from the
             # HSM token.
 
-            __v certutil "${remove_args[@]}" "-n" "$HSM_TOKEN:$CERT_NICKNAME"
-            certutil "${remove_args[@]}" "-n" "$HSM_TOKEN:$CERT_NICKNAME"
+            __v certutil "${remove_args[@]}" "-n" "$HSM_TOKEN:$nickname"
+            certutil "${remove_args[@]}" "-n" "$HSM_TOKEN:$nickname"
             local ret=$?
             if (( ret != 0 )); then
                 __e "certutil returned non-zero result: $ret"
@@ -313,15 +351,17 @@ function PKICertImport() {
         exit 1
     fi
 
-    _import_cert "$NSSDB"
-    _verify_cert "$NSSDB"
-    ret=$?
+    if [ "$CERT_PKCS12" == "false" ]; then
+        _import_cert "$CERT_NICKNAME" "$CERT_TRUST"
+        _verify_cert "$CERT_NICKNAME" "$CERT_USAGE"
+        ret=$?
 
-    # Check if the verification failed. If it did, remove it from the NSS DB.
-    if (( ret != 0 )); then
-        __e "Verification of certificate failed!"
-        _remove_cert "$NSSDB"
-        exit 1
+        # Check if the verification failed. If it did, remove it from the NSS DB.
+        if (( ret != 0 )); then
+            __e "Verification of certificate failed!"
+            _remove_cert "$CERT_NICKNAME"
+            exit 1
+        fi
     fi
 }
 
