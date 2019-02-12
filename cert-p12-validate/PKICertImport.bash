@@ -46,6 +46,15 @@ function PKICertImport() {
     # the leaf certificate.
     local PKCS12_CHAIN="false"
 
+    # Location of PKCS12's leaf certificate file
+    local PKCS12_CERT_PATH=""
+
+    # Name of PKCS12 leaf certificate.
+    local PKCS12_LEAF=""
+
+    # List of PKCS12 CA certificates.
+    local PKCS12_CA=()
+
     # Location of the original NSS DB.
     local NSSDB=""
 
@@ -58,6 +67,8 @@ function PKICertImport() {
     # Name of the HSM token, if used.
     local HSM_TOKEN=""
 
+    # Base location of temporary directory, when used.
+    local TMPBASE=""
 
     ## [ helper functions ] ##
 
@@ -72,6 +83,100 @@ function PKICertImport() {
     function __v() {
         if [ "x$VERBOSE" != "x" ]; then
             echo "v:" "$@" 1>&2
+        fi
+    }
+
+    # __secure_mktmp fills the TMPBASE variable with the path to a directory
+    # we can use that has permissions restricted to our current user. This
+    # will be where we split the .pk12 to.
+    #
+    # Failures are fatal, so use exit instead of return.
+    function __secure_mktmp() {
+        local tmpdir="$TMPDIR"
+        local ret=0
+
+        # Prefer /dev/shm over /tmp: /dev/shm is less frequently backed by
+        # a physical disk than /tmp. However, if TEMPDIR is explicitly set,
+        # respect it.
+        if [ "x$tmpdir" == "x" ] && [ -d "/dev/shm" ]; then
+            tmpdir="/dev/shm"
+        elif [ "x$tmpdir" == "x" ] && [ -d "/tmp" ]; then
+            tmpdir="/tmp"
+        elif [ "x$tmpdir" == "x" ]; then
+            tmpdir="$HOME"
+        fi
+
+        TMPBASE="$(mktemp --directory --tmpdir="$tmpdir" 2>&1)"
+        ret="$?"
+
+        if (( ret != 0 )); then
+            __e "Return from mktemp was non-zero: $ret"
+            __e "$TMPBASE"
+            __e "Perhaps specify TMPDIR in the environment?"
+            exit 1
+        elif [ ! -d "$TMPBASE" ]; then
+            __e "Return from mktemp was zero but invalid directory:"
+            __e "$TMPBASE"
+            __e "Perhaps specify TMPDIR in the environment?"
+            exit 1
+        fi
+
+        # We've validated that TMPBASE is now a valid directory. Since
+        # we created it, we have ownership. Restrict access to only this
+        # user as the original NSS DB might have private keys which we want
+        # to keep secure when copying.
+
+        local user=""
+        local group=""
+
+        # Acquire current username.
+        user="$(id --user --name 2>&1)"
+        ret=$?
+        if (( ret != 0 )); then
+            __e "id exited with non-zero result: $ret"
+            __e "Unable to get current user's name."
+            __secure_rmtmp
+            exit 1
+        fi
+
+        # Acquire current primary group.
+        group="$(id --group --name 2>&1)"
+        ret=$?
+        if (( ret != 0 )); then
+            __e "id exited with non-zero result: $ret"
+            __e "Unable to get current user's name."
+            __secure_rmtmp
+            exit 1
+        fi
+
+        # Restrict permissions from
+        chown "$user:$group" -R "$TMPBASE"
+        ret=$?
+        if (( ret != 0 )); then
+            __e "Return from chown on $TMPBASE was non-zero: $ret"
+            __secure_rmtmp
+            exit 1
+        fi
+
+        chmod 700 -R "$TMPBASE"
+        ret=$?
+        if (( ret != 0 )); then
+            __e "Return from chmod on $TMPBASE was non-zero: $ret"
+            __secure_rmtmp
+            exit 1
+        fi
+
+        return 0
+    }
+
+    ## __secure_rmtmp removes the temporary directory if present. If the shred
+    ## command is present, removes files with shred.
+    function __secure_rmtmp() {
+        if [ -d "$TMPBASE" ]; then
+            if command -v shred >/dev/null 2>&1; then
+                find "$TMPBASE" -type f -print0 | xargs -0 shred -f -n 2 -z '{}'
+            fi
+            rm -rf "$TMPBASE"
         fi
     }
 
@@ -223,7 +328,8 @@ function PKICertImport() {
     # uses exit instead of return.
     function _import_cert() {
         local nickname="$1"
-        local trust="$2"
+        local path="$2"
+        local trust="$3"
 
         local ret=0
         local add_args=("-A")
@@ -234,7 +340,7 @@ function PKICertImport() {
         if [ "x$NSSDB_PASSWORD" != "x" ]; then
             add_args+=("-f" "$NSSDB_PASSWORD")
         fi
-        add_args+=("-i" "$CERT_PATH")
+        add_args+=("-i" "$path")
         if [ "$CERT_ASCII" == "true" ]; then
             add_args+=("-a")
         fi
@@ -352,7 +458,7 @@ function PKICertImport() {
     fi
 
     if [ "$CERT_PKCS12" == "false" ]; then
-        _import_cert "$CERT_NICKNAME" "$CERT_TRUST"
+        _import_cert "$CERT_NICKNAME" "$CERT_PATH" "$CERT_TRUST"
         _verify_cert "$CERT_NICKNAME" "$CERT_USAGE"
         ret=$?
 
@@ -362,7 +468,45 @@ function PKICertImport() {
             _remove_cert "$CERT_NICKNAME"
             exit 1
         fi
+    else
+        __secure_mktmp
+
+        _split_pkcs12
+        _import_cert "$CERT_NICKNAME" "$PKCS12_CERT_PATH" "$CERT_TRUST"
+        _import_pkcs12 "$CERT_PATH"
+
+        # Optionally validate each missing certificate in the chain.
+        if [ "$PKCS12_CHAIN" == "true" ]; then
+            for cert in "${PKCS12_NODE[@]}"; do
+                _verify_cert "$cert" "L"
+                ret=$?
+
+                # Check if the verification failed. If it did, remove it from the NSS DB.
+                if (( ret != 0 )); then
+                    __e "Verification of certificate \`$cert\` failed!"
+                    _remove_all_certs
+                    __secure_rmtmp
+                    exit 1
+                fi
+            done
+        fi
+
+        # Validate leaf certificate
+        _verify_cert "$PKCS12_LEAF" "$CERT_USAGE"
+        ret=$?
+
+        # Check if the verification failed. If it did, remove it from the NSS DB.
+        if (( ret != 0 )); then
+            __e "Verification of certificate \`$PKCS12_LEAF\` failed!"
+            _remove_all_certs
+            __secure_rmtmp
+            exit 1
+        fi
+
+        __secure_rmtmp
     fi
+
+    return 0
 }
 
 PKICertImport "$@"
