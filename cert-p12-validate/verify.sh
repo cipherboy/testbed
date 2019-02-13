@@ -36,16 +36,16 @@ for arg in "$@"; do
         # PKICertImport.bash.
     elif [ "x$arg" == "xsub" ]; then
         echo "Adding sub..."
-        VERBOSE=1 ./PKICertImport.bash $hsm $password -d $nssdb -n "CA Sub$SUFFIX" -t "CT,C,C" -i ca_sub.p12 -u "L" -p -w password.txt
+        VERBOSE=1 ./PKICertImport.bash $hsm $password -d $nssdb -n "CA Sub$SUFFIX" -t "CT,C,C" -i ca_sub.p12 -u "L" -p -w password.txt -c -r "CT,C,C" -s L
         echo "Result of import: $?"
     elif [ "x$arg" == "xcsub" ]; then
         echo "Adding sub..."
-        VERBOSE=1 ./PKICertImport.bash $hsm $password -d $nssdb -n "Compromised Sub$SUFFIX" -t "CT,C,C" -i compromised_sub.p12 -u "L" -p -w password.txt
+        VERBOSE=1 ./PKICertImport.bash $hsm $password -d $nssdb -n "Compromised Sub$SUFFIX" -t "CT,C,C" -i compromised_sub.p12 -u "L" -p -w password.txt -c -r "CT,C,C" -s L
         echo "Result of import: $?"
     elif [ "x$arg" == "xa" ] || [ "x$arg" == "xb" ] || [ "x$arg" == "xc" ] ||
          [ "x$arg" == "xd" ] || [ "x$arg" == "xe" ] ; then
         echo "Adding sslserver-$arg"
-        VERBOSE=1 ./PKICertImport.bash $hsm $password -d $nssdb -n "$arg.cipherboy.com$SUFFIX" -t "u,u,u" -i "sslserver-${arg}.p12" -u "V" -p -w password.txt
+        VERBOSE=1 ./PKICertImport.bash $hsm $password -d $nssdb -n "$arg.cipherboy.com$SUFFIX" -t "u,u,u" -i "sslserver-${arg}.p12" -u "V" -p -w password.txt -c -r "CT,C,C" -s L
         echo "Result of import: $?"
     fi
     echo ""

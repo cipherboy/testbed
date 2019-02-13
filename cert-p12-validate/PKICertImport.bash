@@ -49,8 +49,18 @@ function PKICertImport() {
     # Location of PKCS12's leaf certificate file
     local PKCS12_CERT_PATH=""
 
+    # Intermediate certificate trust flags
+    local PKCS12_CHAIN_TRUST=""
+
+    # Intermediate certificate trust flags
+    local PKCS12_CHAIN_USAGE=""
+
     # List of PKCS12 CA certificates.
-    local PKCS12_CA=()
+    local PKCS12_NODES=()
+
+    # When true, modify trust flags prior to verification (certutil -V). This
+    # allows you to import new root CAs.
+    local PKCS12_UNSAFE="false"
 
     # Location of the original NSS DB.
     local NSSDB=""
@@ -234,6 +244,14 @@ function PKICertImport() {
             elif [ "x$arg" == "x--pkcs12" ] || [ "x$arg" == "x-p" ]; then
                 # If specified, the certificate file is in pkcs12 format.
                 CERT_PKCS12="true"
+            elif [ "x$arg" == "x--chain-trust" ] || [ "x$arg" == "x-r" ]; then
+                # If specified, trust to apply to intermediate certificates.
+                PKCS12_CHAIN_TRUST="$1"
+                shift
+            elif [ "x$arg" == "x--chain-usage" ] || [ "x$arg" == "x-s" ]; then
+                # If specified, usage to validate intermediate certificates with.
+                PKCS12_CHAIN_USAGE="$1"
+                shift
             elif [ "x$arg" == "x--trust" ] || [ "x$arg" == "x-t" ]; then
                 # Always required; certificate trust flags.
                 CERT_TRUST="$1"
@@ -246,6 +264,13 @@ function PKICertImport() {
                 # If specified, password file for the .p12 file.
                 PKCS12_PASSWORD="$1"
                 shift
+            elif [ "x$arg" == "x--unsafe-trust-then-verify" ]; then
+                # If specified, apply nss trust flags prior to verification
+                # (certutil -V). This allows a .p12 to contain a root CA, and that
+                # root CA to be trusted.
+                __e "Warning --unsafe-trust-then-verify has been specified."
+                __e "This option allows compromised .p12 to inject trusted root certificates."
+                PKCS12_UNSAFE="true"
             elif [ "x$arg" == "x--help" ] || [ "x$arg" == "xhelp" ]; then
                 return 2
             else
@@ -259,7 +284,8 @@ function PKICertImport() {
             fi
         done
 
-        # Ensure that we've seen the required arguments.
+        # Ensure that we've seen the required arguments and that our
+        # combination of arguments makes sense.
         if [ "x$NSSDB" == "x" ]; then
             __e "Missing NSS Database location: specify --database/-d"
             return 1
@@ -278,11 +304,26 @@ function PKICertImport() {
         elif [ "$CERT_ASCII" == "true" ] && [ "$CERT_PKCS12" == "true" ]; then
             __e "Can't specify both --ascii/-a and --pkcs12/-p"
             return 1
-        elif [ "$CERT_PKCS12" == "false" ] && [ "$PKCS12_PASSWORD" != "" ]; then
+        elif [ "$CERT_PKCS12" == "false" ] && [ "x$PKCS12_PASSWORD" != "x" ]; then
             __e "Can't specify --pkcs12-password/-w without --pkcs12/-p"
             return 1
         elif [ "$CERT_PKCS12" == "false" ] && [ "$PKCS12_CHAIN" == "true" ]; then
             __e "Can't specify --chain/-c without --pkcs12/-p"
+            return 1
+        elif [ "$CERT_PKCS12" == "false" ] && [ "x$PKCS12_CHAIN_TRUST" != "x" ]; then
+            __e "Can't specify --chain-trust/-r without --pkcs12/-p"
+            return 1
+        elif [ "$CERT_PKCS12" == "false" ] && [ "x$PKCS12_CHAIN_USAGE" != "x" ]; then
+            __e "Can't specify --chain-usage/-s without --pkcs12/-p"
+            return 1
+        elif [ "$CERT_PKCS12" == "false" ] && [ "$PKCS12_UNSAFE" == "true" ]; then
+            __e "Can't specify --unsafe-trust-then-verify without --pkcs12/-p"
+            return 1
+        elif [ "$PKCS12_CHAIN" == "true" ] && [ "x$PKCS12_CHAIN_TRUST" == "x" ]; then
+            __e "Can't specify --chain/-c without --chain-turst/-r"
+            return 1
+        elif [ "$PKCS12_CHAIN" == "true" ] && [ "x$PKCS12_CHAIN_USAGE" == "x" ]; then
+            __e "Can't specify --chain/-c without --chain-usage/-s"
             return 1
         fi
 
@@ -357,6 +398,24 @@ function PKICertImport() {
         fi
     }
 
+    # Trust certificate
+    function _trust_cert() {
+        local nickname="$1"
+        local trust="$2"
+
+        local ret=0
+        local modify_args=("-M")
+        modify_args+=("-d" "$NSSDB_TYPE$NSSDB")
+        modify_args+=("-n" "$nickname")
+        modify_args+=("-t" "$trust")
+
+        # Modify the certificate to have the specified trust flags.
+        __v certutil "${modify_args[@]}"
+        certutil "${modify_args[@]}"
+
+        # We intentionally ignore the return code on modification.
+    }
+
     # Verify the certificate in the NSS DB specified by $1.
     function _verify_cert() {
         local nickname="$1"
@@ -400,6 +459,8 @@ function PKICertImport() {
     # uses exit instead of return.
     function _remove_cert() {
         local nickname="$1"
+        local return_no_exit="$2"
+
         local remove_args=("-D")
 
         remove_args+=("-d" "$NSSDB_TYPE$NSSDB")
@@ -413,7 +474,12 @@ function PKICertImport() {
         if (( ret != 0 )); then
             __e "certutil returned non-zero result: $ret"
             __e "Unable to delete certificate!"
-            exit $?
+
+            if [ "x$return_no_exit" != "xtrue" ]; then
+                exit $ret
+            else
+                return $ret
+            fi
         fi
 
         if [ "x$HSM_TOKEN" != "x" ]; then
@@ -423,12 +489,20 @@ function PKICertImport() {
             __v certutil "${remove_args[@]}" "-n" "$HSM_TOKEN:$nickname"
             certutil "${remove_args[@]}" "-n" "$HSM_TOKEN:$nickname"
             local ret=$?
+
             if (( ret != 0 )); then
                 __e "certutil returned non-zero result: $ret"
                 __e "Unable to delete certificate!"
-                exit $?
+
+                if [ "x$return_no_exit" != "xtrue" ]; then
+                    exit $ret
+                else
+                    return $ret
+                fi
             fi
         fi
+
+        return 0
     }
 
     function _split_pkcs12() {
@@ -526,16 +600,17 @@ function PKICertImport() {
         cat - > "$before_file" <<< "$before_listing"
         cat - > "$after_file" <<< "$after_listing"
 
-        mapfile -t PKCS12_CHAIN < <(comm -13 "$before_file" "$after_file")
+        mapfile -t PKCS12_NODES < <(comm -13 "$before_file" "$after_file")
     }
 
     function _remove_all_certs() {
-        for cert in "${PKCS12_CHAIN[@]}"; do
-            echo "Removing certificate: $cert"
-            _remove_cert "$cert"
+        # When we're removing all certificates, we don't care about the
+        # return code; we only care that the certificates are removed...
+        for cert in "${PKCS12_NODES[@]}"; do
+            _remove_cert "$cert" "true"
         done
 
-        _remove_cert "$CERT_NICKNAME"
+        _remove_cert "$CERT_NICKNAME" "true"
     }
 
     ## [ program flow ] ##
@@ -580,9 +655,25 @@ function PKICertImport() {
         _import_pkcs12
 
         # Optionally validate each missing certificate in the chain.
-        if [ "$PKCS12_CHAIN" == "true" ]; then
-            for cert in "${PKCS12_CHAIN[@]}"; do
-                _verify_cert "$cert" "L"
+        for cert in "${PKCS12_NODES[@]}"; do
+            echo "Checking chain certificate: $cert"
+
+            # Trust certificate after validation -- !!UNSAFE!!
+            if [ "$PKCS12_UNSAFE" == "true" ]; then
+                _trust_cert "$cert" "$PKCS12_CHAIN_TRUST"
+            fi
+
+            if [ "$PKCS12_CHAIN" == "true" ]; then
+                # When usage is a CA certificate, and since this certificate
+                # was part of the chain, we need to ensure this is a "valid ca"
+                # so (certutil -V) passes if the signature is valid and chained
+                # to a known root.
+                if [ "x$PKCS12_CHAIN_USAGE" == "xL" ]; then
+                    echo "Initial trust"
+                    _trust_cert "$cert" "c,c,"
+                fi
+
+                _verify_cert "$cert" "$PKCS12_CHAIN_USAGE"
                 ret=$?
 
                 # Check if the verification failed. If it did, remove it from the NSS DB.
@@ -592,8 +683,13 @@ function PKICertImport() {
                     __secure_rmtmp
                     exit 1
                 fi
-            done
-        fi
+
+                # Trust certificate after validation -- safe.
+                if [ "$PKCS12_UNSAFE" == "false" ]; then
+                    _trust_cert "$cert" "$PKCS12_CHAIN_TRUST"
+                fi
+            fi
+        done
 
         # Validate leaf certificate
         _verify_cert "$CERT_NICKNAME" "$CERT_USAGE"
