@@ -39,7 +39,7 @@ function PKICertImport() {
     # What usage flags to validate the certificate against.
     local CERT_USAGE=""
 
-    # Password for PKCS12 certificate store.
+    # File containing password for PKCS12 certificate store, if present.
     local PKCS12_PASSWORD=""
 
     # Whether or not to validate the entire chain from a .p12 file, or just
@@ -48,9 +48,6 @@ function PKICertImport() {
 
     # Location of PKCS12's leaf certificate file
     local PKCS12_CERT_PATH=""
-
-    # Name of PKCS12 leaf certificate.
-    local PKCS12_LEAF=""
 
     # List of PKCS12 CA certificates.
     local PKCS12_CA=()
@@ -174,7 +171,7 @@ function PKICertImport() {
     function __secure_rmtmp() {
         if [ -d "$TMPBASE" ]; then
             if command -v shred >/dev/null 2>&1; then
-                find "$TMPBASE" -type f -print0 | xargs -0 shred -f -n 2 -z '{}'
+                find "$TMPBASE" -type f -print0 | xargs -0 shred -f -n 2 -z
             fi
             rm -rf "$TMPBASE"
         fi
@@ -246,7 +243,7 @@ function PKICertImport() {
                 CERT_USAGE="$1"
                 shift
             elif [ "x$arg" == "x--pkcs12-password" ] || [ "x$arg" == "x-w" ]; then
-                # If specified, password for the .p12 file.
+                # If specified, password file for the .p12 file.
                 PKCS12_PASSWORD="$1"
                 shift
             elif [ "x$arg" == "x--help" ] || [ "x$arg" == "xhelp" ]; then
@@ -284,7 +281,7 @@ function PKICertImport() {
         elif [ "$CERT_PKCS12" == "false" ] && [ "$PKCS12_PASSWORD" != "" ]; then
             __e "Can't specify --pkcs12-password/-w without --pkcs12/-p"
             return 1
-        elif [ "$CERT_PKCS12" == "false" ] && [ "$PKCS12_CHAIN" != "" ]; then
+        elif [ "$CERT_PKCS12" == "false" ] && [ "$PKCS12_CHAIN" == "true" ]; then
             __e "Can't specify --chain/-c without --pkcs12/-p"
             return 1
         fi
@@ -434,6 +431,113 @@ function PKICertImport() {
         fi
     }
 
+    function _split_pkcs12() {
+        local pkcs12_args=("pkcs12")
+        PKCS12_CERT_PATH="$TMPBASE/certificate.crt"
+
+        # Path to input .p12 file. We assume this is passed by --certificate/-i
+        pkcs12_args+=("-in" "$CERT_PATH")
+
+        # Only export the leaf certificate; this is the certificate we're
+        # giving a nickname to.
+        pkcs12_args+=("-clcerts")
+
+        # Don't export the private key associated with the certificate.
+        pkcs12_args+=("-nokeys")
+
+        # Don't encrypt (no DES) the output certificate. It is a public key.
+        pkcs12_args+=("-nodes")
+
+        # Specify output path for the exported certificate.
+        pkcs12_args+=("-out" "$PKCS12_CERT_PATH")
+
+        if [ "x$arg" != "x$PKCS12_PASSWORD" ]; then
+            # When specified, a path to a file containing the PKCS12 password.
+            pkcs12_args+=("-passin" "file:$PKCS12_PASSWORD")
+
+            __v openssl "${pkcs12_args[@]}"
+            openssl "${pkcs12_args[@]}"
+            ret=$?
+            if (( ret != 0 )); then
+                __e "openssl pkcs12 split returned: $ret"
+                __secure_rmtmp
+                exit $ret
+            fi
+        else
+            __v openssl "${pkcs12_args[@]}"
+            openssl "${pkcs12_args[@]}"
+            ret=$?
+            if (( ret != 0 )); then
+                __e "openssl pkcs12 split returned: $ret"
+                __secure_rmtmp
+                exit $ret
+            fi
+        fi
+    }
+
+    function _import_pkcs12() {
+        local before_listing=""
+        local after_listing=""
+
+        # List of known trust flags; combined from man pages and online
+        # documentation.
+        local tf="pPcCtTuw"
+
+        # Arguments for listing certificates.
+        local list_args=("-L")
+        list_args+=("-d" "$NSSDB_TYPE$NSSDB")
+
+
+        # Arguments for import
+        local import_args=("-i" "$CERT_PATH")
+        import_args+=("-d" "$NSSDB_TYPE$NSSDB")
+
+        # When present, specify NSS DB password.
+        if [ "x$NSSDB_PASSWORD" != "x" ]; then
+            import_args+=("-k" "$NSSDB_PASSWORD")
+        fi
+
+        # When present, specify .p12 file password.
+        if [ "x$PKCS12_PASSWORD" != "x" ]; then
+            import_args+=("-w" "$PKCS12_PASSWORD")
+        fi
+
+        # List certificates prior to import.
+        __v certutil "${list_args[@]}"
+        before_listing="$(certutil "${list_args[@]}" | grep "[$tf]*,[$tf]*,[$tf]*" | sed "s/[[:space:]]*[$tf]*,[$tf]*,[$tf]*//g" | sed 's/[[:space:]]*$//g' | sort)"
+
+        # Perform import
+        __v pk12util "${import_args[@]}"
+        pk12util "${import_args[@]}"
+        ret=$?
+
+        if (( ret != 0 )); then
+            __e "Error importing certificates from .p12 file!"
+            _remove_cert "$CERT_NICKNAME"
+            __secure_rmtmp
+            exit 1
+        fi
+
+        __v certutil "${list_args[@]}"
+        after_listing="$(certutil "${list_args[@]}" | grep "[$tf]*,[$tf]*,[$tf]*" | sed "s/[[:space:]]*[$tf]*,[$tf]*,[$tf]*//g" | sed 's/[[:space:]]*$//g' | sort)"
+
+        local before_file="$TMPBASE/before.txt"
+        local after_file="$TMPBASE/after.txt"
+        cat - > "$before_file" <<< "$before_listing"
+        cat - > "$after_file" <<< "$after_listing"
+
+        mapfile -t PKCS12_CHAIN < <(comm -13 "$before_file" "$after_file")
+    }
+
+    function _remove_all_certs() {
+        for cert in "${PKCS12_CHAIN[@]}"; do
+            echo "Removing certificate: $cert"
+            _remove_cert "$cert"
+        done
+
+        _remove_cert "$CERT_NICKNAME"
+    }
+
     ## [ program flow ] ##
     local ret=0
 
@@ -473,11 +577,11 @@ function PKICertImport() {
 
         _split_pkcs12
         _import_cert "$CERT_NICKNAME" "$PKCS12_CERT_PATH" "$CERT_TRUST"
-        _import_pkcs12 "$CERT_PATH"
+        _import_pkcs12
 
         # Optionally validate each missing certificate in the chain.
         if [ "$PKCS12_CHAIN" == "true" ]; then
-            for cert in "${PKCS12_NODE[@]}"; do
+            for cert in "${PKCS12_CHAIN[@]}"; do
                 _verify_cert "$cert" "L"
                 ret=$?
 
@@ -492,12 +596,12 @@ function PKICertImport() {
         fi
 
         # Validate leaf certificate
-        _verify_cert "$PKCS12_LEAF" "$CERT_USAGE"
+        _verify_cert "$CERT_NICKNAME" "$CERT_USAGE"
         ret=$?
 
         # Check if the verification failed. If it did, remove it from the NSS DB.
         if (( ret != 0 )); then
-            __e "Verification of certificate \`$PKCS12_LEAF\` failed!"
+            __e "Verification of certificate \`$CERT_NICKNAME\` failed!"
             _remove_all_certs
             __secure_rmtmp
             exit 1
