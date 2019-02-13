@@ -62,6 +62,9 @@ function PKICertImport() {
     # allows you to import new root CAs.
     local PKCS12_UNSAFE="false"
 
+    # When true, only import the leaf certificate/key from the .p12 file.
+    local PKCS12_LEAF="false"
+
     # Location of the original NSS DB.
     local NSSDB=""
 
@@ -173,6 +176,11 @@ function PKICertImport() {
             exit 1
         fi
 
+        # Before continuing, save certificate to temporary location. This
+        # ensures we don't use accidentally use it.
+        cp "$CERT_PATH" "$TMPBASE/cert_path.orig"
+        CERT_PATH="$TMPBASE/cert_path.orig"
+
         return 0
     }
 
@@ -237,6 +245,9 @@ function PKICertImport() {
                 # Always required; path to the original certificate.
                 CERT_PATH="$1"
                 shift
+            elif [ "x$arg" == "x--leaf-only" ] || [ "x$arg" == "x-l" ]; then
+                # If specified, only import the leaf certificate from a .p12 file.
+                PKCS12_LEAF="true"
             elif [ "x$arg" == "x--nickname" ] || [ "x$arg" == "x-n" ]; then
                 # Always required; nickname for the certificate.
                 CERT_NICKNAME="$1"
@@ -270,6 +281,7 @@ function PKICertImport() {
                 # root CA to be trusted.
                 __e "Warning --unsafe-trust-then-verify has been specified."
                 __e "This option allows compromised .p12 to inject trusted root certificates."
+                __e "This option *always* modifies the trust flag, even when the chain is unchecked."
                 PKCS12_UNSAFE="true"
             elif [ "x$arg" == "x--help" ] || [ "x$arg" == "xhelp" ]; then
                 return 2
@@ -319,11 +331,17 @@ function PKICertImport() {
         elif [ "$CERT_PKCS12" == "false" ] && [ "$PKCS12_UNSAFE" == "true" ]; then
             __e "Can't specify --unsafe-trust-then-verify without --pkcs12/-p"
             return 1
+        elif [ "$CERT_PKCS12" == "false" ] && [ "$PKCS12_LEAF" == "true" ]; then
+            __e "Can't specify --chain-usage/-s without --pkcs12/-p"
+            return 1
         elif [ "$PKCS12_CHAIN" == "true" ] && [ "x$PKCS12_CHAIN_TRUST" == "x" ]; then
             __e "Can't specify --chain/-c without --chain-turst/-r"
             return 1
         elif [ "$PKCS12_CHAIN" == "true" ] && [ "x$PKCS12_CHAIN_USAGE" == "x" ]; then
             __e "Can't specify --chain/-c without --chain-usage/-s"
+            return 1
+        elif [ "$PKCS12_CHAIN" == "true" ] && [ "$PKCS12_LEAF" == "true" ]; then
+            __e "Can't specify --chain/-c with --leaf-only/-l"
             return 1
         fi
 
@@ -354,6 +372,9 @@ function PKICertImport() {
         echo "--pkcs12, -p: the certificate is a .p12/PKCS12 file"
         echo "--pkcs12-password, -w: password file for the .p12 file; requires --pkcs12"
         echo "--hsm, -h <name>: name of the HSM to use"
+        echo ""
+        echo "Unsafe arguments:"
+        echo "--unsafe-turst-then-verify -- specify trust flags before verification of chain"
         echo ""
         echo "Environment variables:"
         echo "VERBOSE: see certutil commands being run"
@@ -528,21 +549,58 @@ function PKICertImport() {
         if [ "x$arg" != "x$PKCS12_PASSWORD" ]; then
             # When specified, a path to a file containing the PKCS12 password.
             pkcs12_args+=("-passin" "file:$PKCS12_PASSWORD")
+        fi
 
-            __v openssl "${pkcs12_args[@]}"
-            openssl "${pkcs12_args[@]}"
+         __v openssl "${pkcs12_args[@]}"
+        openssl "${pkcs12_args[@]}"
+        ret=$?
+        if (( ret != 0 )); then
+            __e "openssl pkcs12 split returned: $ret"
+            __secure_rmtmp
+            exit $ret
+        fi
+
+        # In the event we only want the leaf certificate, we have to do a
+        # little bit more work...
+        if [ "$PKCS12_LEAF" == "true" ]; then
+            local priv_key="$TMPBASE/cert.key"
+
+            # First, split off only the private key.
+            key_args=("pkcs12")
+            key_args+=("-in" "$CERT_PATH")
+            key_args+=("-clcerts" "-nocerts" "-nodes")
+            key_args+=("-out" "$priv_key")
+
+            if [ "x$arg" != "x$PKCS12_PASSWORD" ]; then
+                # When specified, a path containing the PKCS12 password.
+                key_args+=("-passin" "file:$PKCS12_PASSWORD")
+            fi
+
+            __v openssl "${key_args[@]}"
+            openssl "${key_args[@]}"
             ret=$?
             if (( ret != 0 )); then
-                __e "openssl pkcs12 split returned: $ret"
+                __e "openssl pkcs12 split private key returned: $ret"
                 __secure_rmtmp
                 exit $ret
             fi
-        else
-            __v openssl "${pkcs12_args[@]}"
-            openssl "${pkcs12_args[@]}"
+
+            # Now, join leaf certificate and private key in a new .p12
+            # with the original password.
+            join_args=("pkcs12" "-export")
+            join_args+=("-in" "$PKCS12_CERT_PATH")
+            join_args+=("-inkey" "$priv_key")
+            join_args+=("-out" "$TMPBASE/joined.p12")
+            if [ "x$arg" != "x$PKCS12_PASSWORD" ]; then
+                # When specified, a path containing the PKCS12 password.
+                join_args+=("-passout" "file:$PKCS12_PASSWORD")
+            fi
+
+            __v openssl "${join_args[@]}"
+            openssl "${join_args[@]}"
             ret=$?
             if (( ret != 0 )); then
-                __e "openssl pkcs12 split returned: $ret"
+                __e "openssl pkcs12 join leaf parts returned: $ret"
                 __secure_rmtmp
                 exit $ret
             fi
@@ -555,12 +613,11 @@ function PKICertImport() {
 
         # List of known trust flags; combined from man pages and online
         # documentation.
-        local tf="pPcCtTuw"
+        local tf="pPcCTuw"
 
         # Arguments for listing certificates.
         local list_args=("-L")
         list_args+=("-d" "$NSSDB_TYPE$NSSDB")
-
 
         # Arguments for import
         local import_args=("-i" "$CERT_PATH")
@@ -601,6 +658,63 @@ function PKICertImport() {
         cat - > "$after_file" <<< "$after_listing"
 
         mapfile -t PKCS12_NODES < <(comm -13 "$before_file" "$after_file")
+    }
+
+    function _verify_chain() {
+        local remaining_nodes=("${PKCS12_NODES[@]}")
+        local validated_nodes=()
+        local current=0
+
+        # Trust certificate before validation -- UNSAFE flag
+        if [ "$PKCS12_UNSAFE" == "true" ]; then
+            for cert in "${PKCS12_NODES[@]}"; do
+                _trust_cert "$cert" "$PKCS12_CHAIN_TRUST"
+            done
+        fi
+
+        # If we don't need to validate anything, go ahead and exit
+        if [ "$PKCS12_CHAIN" == "false" ]; then
+            return 0
+        fi
+
+        pre_count=${#remaining_nodes}
+        while (( pre_count > 0 )); do
+            local unvalidated_nodes=()
+            for cert in "${remaining_nodes[@]}"; do
+                # When usage is a CA certificate, and since this certificate
+                # was part of the chain, we need to ensure this is a "valid ca"
+                # so (certutil -V) passes if the signature is valid and chained
+                # to a known root.
+                if [ "x$PKCS12_CHAIN_USAGE" == "xL" ] && [ "$PKCS12_UNSAFE" == "false" ]; then
+                    echo "Initial trust"
+                    _trust_cert "$cert" "c,c,"
+                fi
+
+                _verify_cert "$cert" "$PKCS12_CHAIN_USAGE"
+                ret=$?
+
+                if (( ret == 0 )); then
+                    _trust_cert "$cert" "$PKCS12_CHAIN_TRUST"
+                else
+                    unvalidated_nodes+=("$cert")
+                fi
+            done
+
+            remaining_nodes=("${unvalidated_nodes[@]}")
+            post_count=${#remaining_nodes}
+
+            if (( post_count == pre_count )); then
+                # Failed to make progress -- likely a bad cert chain and/or
+                # untrusted certificate somewhere.
+                __e "Unable to make progress validating cert chain."
+                __e "Please validate all intermediate certs and ensure the root is trusted."
+                _remove_all_certs
+                __secure_rmtmp
+                exit 1
+            fi
+
+            pre_count=$post_count
+        done
     }
 
     function _remove_all_certs() {
@@ -651,45 +765,11 @@ function PKICertImport() {
         __secure_mktmp
 
         _split_pkcs12
+
         _import_cert "$CERT_NICKNAME" "$PKCS12_CERT_PATH" "$CERT_TRUST"
         _import_pkcs12
 
-        # Optionally validate each missing certificate in the chain.
-        for cert in "${PKCS12_NODES[@]}"; do
-            echo "Checking chain certificate: $cert"
-
-            # Trust certificate after validation -- !!UNSAFE!!
-            if [ "$PKCS12_UNSAFE" == "true" ]; then
-                _trust_cert "$cert" "$PKCS12_CHAIN_TRUST"
-            fi
-
-            if [ "$PKCS12_CHAIN" == "true" ]; then
-                # When usage is a CA certificate, and since this certificate
-                # was part of the chain, we need to ensure this is a "valid ca"
-                # so (certutil -V) passes if the signature is valid and chained
-                # to a known root.
-                if [ "x$PKCS12_CHAIN_USAGE" == "xL" ]; then
-                    echo "Initial trust"
-                    _trust_cert "$cert" "c,c,"
-                fi
-
-                _verify_cert "$cert" "$PKCS12_CHAIN_USAGE"
-                ret=$?
-
-                # Check if the verification failed. If it did, remove it from the NSS DB.
-                if (( ret != 0 )); then
-                    __e "Verification of certificate \`$cert\` failed!"
-                    _remove_all_certs
-                    __secure_rmtmp
-                    exit 1
-                fi
-
-                # Trust certificate after validation -- safe.
-                if [ "$PKCS12_UNSAFE" == "false" ]; then
-                    _trust_cert "$cert" "$PKCS12_CHAIN_TRUST"
-                fi
-            fi
-        done
+        _verify_chain
 
         # Validate leaf certificate
         _verify_cert "$CERT_NICKNAME" "$CERT_USAGE"
