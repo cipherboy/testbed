@@ -58,6 +58,12 @@ function PKICertImport() {
     # List of PKCS12 CA certificates.
     local PKCS12_NODES=()
 
+    # List of PKCS12 Imported Keys.
+    local PKCS12_KEYS=()
+
+    # When false, don't remove keys from .p12 on failed verification.
+    local PKCS12_REMOVE_KEYS="true"
+
     # When true, modify trust flags prior to verification (certutil -V). This
     # allows you to import new root CAs.
     local PKCS12_UNSAFE="false"
@@ -275,6 +281,10 @@ function PKICertImport() {
                 # If specified, password file for the .p12 file.
                 PKCS12_PASSWORD="$1"
                 shift
+            elif [ "x$arg" == "x--unsafe-keep-keys" ]; then
+                __e "Warning: --unsafe-keep-keys has been specified."
+                __e "This option allows you to keep keys imported from a .p12 when verification failed."
+                PKCS12_REMOVE_KEYS="false"
             elif [ "x$arg" == "x--unsafe-trust-then-verify" ]; then
                 # If specified, apply nss trust flags prior to verification
                 # (certutil -V). This allows a .p12 to contain a root CA, and that
@@ -328,6 +338,9 @@ function PKICertImport() {
         elif [ "$CERT_PKCS12" == "false" ] && [ "x$PKCS12_CHAIN_USAGE" != "x" ]; then
             __e "Can't specify --chain-usage/-s without --pkcs12/-p"
             return 1
+        elif [ "$CERT_PKCS12" == "false" ] && [ "$PKCS12_REMOVE_KEYS" == "false" ]; then
+            __e "Can't specify --unsafe-keep-keys without --pkcs12/-p"
+            return 1
         elif [ "$CERT_PKCS12" == "false" ] && [ "$PKCS12_UNSAFE" == "true" ]; then
             __e "Can't specify --unsafe-trust-then-verify without --pkcs12/-p"
             return 1
@@ -370,10 +383,13 @@ function PKICertImport() {
         echo "--chain, -c: check the entire PKCS12 chain; requires --pkcs12"
         echo "--password, -f <path>: password file for the NSS DB"
         echo "--pkcs12, -p: the certificate is a .p12/PKCS12 file"
+        echo "--chain-trust, -r <flags>: trust flags to assign intermediate certificates; requires --chain"
+        echo "--chain-usage, -s <usage>: usage to validate intermediate certificates against; requires --chain"
         echo "--pkcs12-password, -w: password file for the .p12 file; requires --pkcs12"
         echo "--hsm, -h <name>: name of the HSM to use"
         echo ""
         echo "Unsafe arguments:"
+        echo "--unsafe-keep-keys -- keep case in event of verification failure"
         echo "--unsafe-turst-then-verify -- specify trust flags before verification of chain"
         echo ""
         echo "Environment variables:"
@@ -526,6 +542,35 @@ function PKICertImport() {
         return 0
     }
 
+    # Remove the specified key from the NSS DB specified by $1.
+    function _remove_key() {
+        local key_id="$1"
+
+        local remove_args=("-F")
+
+        remove_args+=("-d" "$NSSDB_TYPE$NSSDB")
+        if [ "x$NSSDB_PASSWORD" != "x" ]; then
+            remove_args+=("-f" "$NSSDB_PASSWORD")
+        fi
+
+        __v certutil "${remove_args[@]}" "-k" "$key_id"
+        certutil "${remove_args[@]}" "-k" "$key_id"
+        local ret=$?
+        if (( ret != 0 )); then
+            __e "certutil returned non-zero result: $ret"
+            __e "Unable to delete specified key: $key_id!"
+
+            return $ret
+        fi
+
+        # Since we only remove keys when we're importing a .p12, and we don't
+        # support importing .p12 onto HSMs, we don't need to handle the key
+        # removal case on HSMs.
+
+        return 0
+    }
+
+
     function _split_pkcs12() {
         local pkcs12_args=("pkcs12")
         PKCS12_CERT_PATH="$TMPBASE/certificate.crt"
@@ -608,34 +653,47 @@ function PKICertImport() {
     }
 
     function _import_pkcs12() {
-        local before_listing=""
-        local after_listing=""
+        local before_certs="$TMPBASE/before_certs.txt"
+        local after_certs="$TMPBASE/after_certs.txt"
+        local before_keys="$TMPBASE/before_keys.txt"
+        local after_keys="$TMPBASE/after_keys.txt"
 
         # List of known trust flags; combined from man pages and online
         # documentation.
         local tf="pPcCTuw"
 
         # Arguments for listing certificates.
-        local list_args=("-L")
+        local list_args=()
         list_args+=("-d" "$NSSDB_TYPE$NSSDB")
 
         # Arguments for import
         local import_args=("-i" "$CERT_PATH")
         import_args+=("-d" "$NSSDB_TYPE$NSSDB")
 
-        # When present, specify NSS DB password.
+        # When present, specify NSS DB password for listing and importing.
         if [ "x$NSSDB_PASSWORD" != "x" ]; then
+            list_args+=("-f" "$NSSDB_PASSWORD")
             import_args+=("-k" "$NSSDB_PASSWORD")
         fi
 
-        # When present, specify .p12 file password.
+        # When present, specify .p12 file password on import.
         if [ "x$PKCS12_PASSWORD" != "x" ]; then
             import_args+=("-w" "$PKCS12_PASSWORD")
         fi
 
         # List certificates prior to import.
-        __v certutil "${list_args[@]}"
-        before_listing="$(certutil "${list_args[@]}" | grep "[$tf]*,[$tf]*,[$tf]*" | sed "s/[[:space:]]*[$tf]*,[$tf]*,[$tf]*//g" | sed 's/[[:space:]]*$//g' | sort)"
+        __v certutil -L "${list_args[@]}"
+        __v certutil -K "${list_args[@]}"
+        certutil -L "${list_args[@]}" |
+            grep "[$tf]*,[$tf]*,[$tf]*" |
+            sed "s/[[:space:]]*[$tf]*,[$tf]*,[$tf]*//g" |
+            sed 's/[[:space:]]*$//g' |
+            sort > "$before_certs"
+        certutil -K -d dbs/verify/ |
+            grep '^<[[:space:]]*[0-9]*>' |
+            sed 's/^<[[:space:]]*[0-9]*>[[:space:]]*rsa//g' |
+            awk '{print $1}' |
+            sort > "$before_keys"
 
         # Perform import
         __v pk12util "${import_args[@]}"
@@ -649,15 +707,22 @@ function PKICertImport() {
             exit 1
         fi
 
-        __v certutil "${list_args[@]}"
-        after_listing="$(certutil "${list_args[@]}" | grep "[$tf]*,[$tf]*,[$tf]*" | sed "s/[[:space:]]*[$tf]*,[$tf]*,[$tf]*//g" | sed 's/[[:space:]]*$//g' | sort)"
+        # List certificates after import.
+        __v certutil -L "${list_args[@]}"
+        __v certutil -K "${list_args[@]}"
+        certutil -L "${list_args[@]}" |
+            grep "[$tf]*,[$tf]*,[$tf]*" |
+            sed "s/[[:space:]]*[$tf]*,[$tf]*,[$tf]*//g" |
+            sed 's/[[:space:]]*$//g' |
+            sort > "$after_certs"
+        certutil -K -d dbs/verify/ |
+            grep '^<[[:space:]]*[0-9]*>' |
+            sed 's/^<[[:space:]]*[0-9]*>[[:space:]]*rsa//g' |
+            awk '{print $1}' |
+            sort > "$after_keys"
 
-        local before_file="$TMPBASE/before.txt"
-        local after_file="$TMPBASE/after.txt"
-        cat - > "$before_file" <<< "$before_listing"
-        cat - > "$after_file" <<< "$after_listing"
-
-        mapfile -t PKCS12_NODES < <(comm -13 "$before_file" "$after_file")
+        mapfile -t PKCS12_NODES < <(comm -13 "$before_certs" "$after_certs")
+        mapfile -t PKCS12_KEYS < <(comm -13 "$before_keys" "$after_keys")
     }
 
     function _verify_chain() {
@@ -708,12 +773,25 @@ function PKICertImport() {
                 # untrusted certificate somewhere.
                 __e "Unable to make progress validating cert chain."
                 __e "Please validate all intermediate certs and ensure the root is trusted."
+                _remove_all_keys
                 _remove_all_certs
                 __secure_rmtmp
                 exit 1
             fi
 
             pre_count=$post_count
+        done
+    }
+
+    function _remove_all_keys() {
+        if [ "$PKCS12_REMOVE_KEYS" == "false" ]; then
+            return 0
+        fi
+
+        # When we're removing all keys, we don't care about the return code;
+        # we only care that the certificates are removed...
+        for key in "${PKCS12_KEYS[@]}"; do
+            _remove_key "$key"
         done
     }
 
@@ -778,6 +856,7 @@ function PKICertImport() {
         # Check if the verification failed. If it did, remove it from the NSS DB.
         if (( ret != 0 )); then
             __e "Verification of certificate \`$CERT_NICKNAME\` failed!"
+            _remove_all_keys
             _remove_all_certs
             __secure_rmtmp
             exit 1
