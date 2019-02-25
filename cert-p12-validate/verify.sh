@@ -40,12 +40,12 @@ for arg in "$@"; do
         echo "Result of import: $?"
     elif [ "x$arg" == "xcsub" ]; then
         echo "Adding sub..."
-        VERBOSE=1 ./PKICertImport.bash $hsm $password -d $nssdb -n "Compromised Sub$SUFFIX" -t "CT,C,C" -i compromised_sub.p12 -u "L" -p -w password.txt -c -r "CT,C,C" -s L
+        VERBOSE=1 ./PKICertImport.bash $hsm $password -d $nssdb -n "Compromised Sub$SUFFIX" -t "CT,C,C" -i compromised_sub.p12 -u "L" -p -w password.txt -c --chain-trust "CT,C,C" --chain-usage "L"
         echo "Result of import: $?"
     elif [ "x$arg" == "xa" ] || [ "x$arg" == "xb" ] || [ "x$arg" == "xc" ] ||
          [ "x$arg" == "xd" ] || [ "x$arg" == "xe" ] ; then
         echo "Adding sslserver-$arg"
-        VERBOSE=1 ./PKICertImport.bash $hsm $password -d $nssdb -n "$arg.cipherboy.com$SUFFIX" -t "u,u,u" -i "sslserver-${arg}.p12" -u "V" -p -w password.txt -c -r "CT,C,C" -s L
+        VERBOSE=1 ./PKICertImport.bash $hsm $password -d $nssdb -n "$arg.cipherboy.com$SUFFIX" -t "u,u,u" -i "sslserver-${arg}.p12" -u "V" -p -w password.txt  -c --chain-trust "CT,C,C" --chain-usage "L"
         echo "Result of import: $?"
     fi
     echo ""
