@@ -1,6 +1,9 @@
+#!/usr/bin/python3
+
 import cmsh
 import z3
 
+import sys
 import random
 import time
 
@@ -12,16 +15,33 @@ def ri(_max):
 def build_benchmark(num_vars=100, num_clauses=1000):
     clauses = set()
     operators = ['and', 'notand', 'andnot', 'notandnot', 'or', 'notor', 'ornot', 'notornot']
+    # operators = ['and', 'or']
     num_operators = len(operators)
 
+    unused_vars = list(range(0, num_vars))
+    random.shuffle(unused_vars)
+
     while len(clauses) < num_clauses:
-        left = ri(num_vars)
+        if unused_vars:
+            left = unused_vars[0]
+            unused_vars = unused_vars[1:]
+        else:
+            left = ri(num_vars)
         op = operators[ri(num_operators)]
-        right = ri(num_vars)
+
+        if unused_vars:
+            right = unused_vars[0]
+            unused_vars = unused_vars[1:]
+        else:
+            right = ri(num_vars)
+
+        assert left < num_vars
+        assert right < num_vars
 
         clauses.add((left, op, right))
 
     return clauses
+
 
 def bench_z3(num_vars, benchmark):
     z3s = z3.Solver()
@@ -98,28 +118,96 @@ def bench_cmsh(num_vars, benchmark):
     return sat, result
 
 
+def assert_results(sat, z3r, cmr, benchmark):
+    assert len(z3r) == len(cmr)
+    if not sat:
+        return
+
+    for clause in benchmark:
+        i_left, op, i_right = clause
+        z3left = z3r[i_left]
+        z3right = z3r[i_right]
+
+        cmleft = cmr[i_left]
+        cmright = cmr[i_right]
+        if op == 'and':
+            assert z3left and z3right
+            assert cmleft and cmright
+        elif op == 'notand':
+            assert (not z3left) and z3right
+            assert (not cmleft) and cmright
+        elif op == 'andnot':
+            assert z3left and (not z3right)
+            assert cmleft and (not cmright)
+        elif op == 'notandnot':
+            assert (not z3left) and (not z3right)
+            assert (not cmleft) and (not cmright)
+        elif op == 'or':
+            assert z3left or z3right
+            assert cmleft or cmright
+        elif op == 'notor':
+            assert (not z3left) or z3right
+            assert (not cmleft) or cmright
+        elif op == 'ornot':
+            assert z3left or (not z3right)
+            assert cmleft or (not cmright)
+        elif op == 'notornot':
+            assert (not z3left) or (not z3right)
+            assert (not cmleft) or (not cmright)
+
+
+
 def main():
-    num_vars = 100000
-    num_clauses = 100000
+    num_vars = 100
+    num_clauses = 1000
 
-    a = time.time()
-    benchmark = build_benchmark(num_vars, num_clauses)
-    b = time.time()
+    if len(sys.argv) >= 2:
+        num_vars = int(sys.argv[1])
+    if len(sys.argv) >= 3:
+        num_clauses = int(sys.argv[2])
 
-    print("Time to build benchmark:", (b - a))
+    benchmark_total = 0
+    z3_total = 0
+    cms_total = 0
 
-    a = time.time()
-    z3sat, z3result = bench_z3(num_vars, benchmark)
-    b = time.time()
-    print("Time for z3:", (b - a))
+    num_unsat = 0
+    num_sat = 0
 
-    a = time.time()
-    cmsat, cmresult = bench_cmsh(num_vars, benchmark)
-    b = time.time()
-    print("Time for cmsh:", (b - a))
+    while num_sat < 10:
+        a = time.time()
+        benchmark = build_benchmark(num_vars, num_clauses)
+        b = time.time()
+        benchmark_total += (b-a)
+        print("Time to build benchmark:", (b - a))
 
-    assert z3sat == cmsat
-    assert z3result == cmresult
+        a = time.time()
+        z3sat, z3result = bench_z3(num_vars, benchmark)
+        b = time.time()
+        z3_total += (b-a)
+        print("Time for z3:", (b - a))
+
+        a = time.time()
+        cmsat, cmresult = bench_cmsh(num_vars, benchmark)
+        b = time.time()
+        cms_total += (b-a)
+        print("Time for cmsh:", (b - a))
+
+        assert z3sat == cmsat
+        print(z3sat)
+        if z3sat:
+            assert len(z3result) == num_vars
+            assert len(cmresult) == num_vars
+
+        assert_results(cmsat, z3result, cmresult, benchmark)
+        if z3sat:
+            num_sat += 1
+        else:
+            num_unsat += 1
+
+    print(benchmark_total)
+    print(z3_total, cms_total)
+    print(z3_total / cms_total)
+    print(num_sat, num_unsat)
 
 if __name__ == "__main__":
     main()
