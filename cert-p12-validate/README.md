@@ -38,13 +38,3 @@ But sub is already imported when b is imported (as we're importing PKCS12
 chains). However, this will fail because the root isn't trusted:
 
     verify.sh b
-
-To run on a HSM:
-
-    PASSWORD="password.txt" HSM="NHSM6000-OCS" SUFFIX="-testbed-1" verify.sh root sub b
-
-If you wish to remove certificates from the HSM:
-
-    delete.sh "CA Root-testbed-1"
-
-Note that `delete.sh` will then list all HSM and NSSDB certificates after operation.
