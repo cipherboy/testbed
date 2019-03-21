@@ -30,11 +30,14 @@ three certificates:
 
     verify.sh root sub b
 
-But this will only import two:
+This will complete successfully as well:
 
     verify.sh root b sub
+    
+But sub is already imported when b is imported (as we're importing PKCS12
+chains). However, this will fail because the root isn't trusted:
 
-As `b` cannot be verified since `sub` hasn't been imported yet.
+    verify.sh b
 
 To run on a HSM:
 
