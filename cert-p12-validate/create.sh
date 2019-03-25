@@ -55,6 +55,7 @@ echo -e "y\n\ny\ny\n${SKID}\n\n\n\n${SKID}\n\n2\n7\n${OCSP}\n\n\n\n" | \
  -m $RANDOM \
  -k rsa \
  -g 4096 \
+ -v 1024 \
  -Z SHA256 \
  -2 \
  -3 \
@@ -93,6 +94,7 @@ echo -e "y\n\n\n\n\n\n\n2\n7\n${OCSP}\n\n\n" |
  -i ca_sub.csr \
  -o ca_sub.crt \
  -c "CA Root" \
+ -v 1024 \
  -3 \
  --extAIA \
  --keyUsage critical,certSigning,crlSigning,digitalSignature,nonRepudiation \
@@ -132,6 +134,7 @@ echo -e "y\n\n\n\n\n2\n7\n${OCSP}\n\n\n" |
  -i sslserver-a.csr \
  -o sslserver-a.crt \
  -c "CA Root" \
+ -v 1024 \
  -3 \
  --extAIA \
  --keyUsage critical,dataEncipherment,keyEncipherment,digitalSignature \
@@ -171,6 +174,7 @@ echo -e "y\n\n\n\n\n2\n7\n${OCSP}\n\n\n" |
  -i sslserver-b.csr \
  -o sslserver-b.crt \
  -c "CA Sub" \
+ -v 1024 \
  -3 \
  --extAIA \
  --keyUsage critical,dataEncipherment,keyEncipherment,digitalSignature \
@@ -199,6 +203,7 @@ echo -e "y\n\n\n\n\n2\n7\n${OCSP}\n\n\n\n" | \
  -m $RANDOM \
  -k rsa \
  -g 4096 \
+ -v 1024 \
  -Z SHA256 \
  -3 \
  --extAIA \
@@ -228,6 +233,7 @@ echo -e "y\n\ny\ny\n${SKID}\n\n\n\n${SKID}\n\n2\n7\n${OCSP}\n\n\n\n" | \
  -m $RANDOM \
  -k rsa \
  -g 4096 \
+ -v 1024 \
  -Z SHA256 \
  -2 \
  -3 \
@@ -267,6 +273,7 @@ echo -e "y\n\n\n\n\n\n\n2\n7\n${OCSP}\n\n\n" |
  -i compromised_sub.csr \
  -o compromised_sub.crt \
  -c "Compromised Root" \
+ -v 1024 \
  -3 \
  --extAIA \
  --keyUsage critical,certSigning,crlSigning,digitalSignature,nonRepudiation \
@@ -306,6 +313,7 @@ echo -e "y\n\n\n\n\n2\n7\n${OCSP}\n\n\n" |
  -i sslserver-d.csr \
  -o sslserver-d.crt \
  -c "Compromised Root" \
+ -v 1024 \
  -3 \
  --extAIA \
  --keyUsage critical,dataEncipherment,keyEncipherment,digitalSignature \
@@ -345,6 +353,7 @@ echo -e "y\n\n\n\n\n2\n7\n${OCSP}\n\n\n" |
  -i sslserver-e.csr \
  -o sslserver-e.crt \
  -c "Compromised Sub" \
+ -v 1024 \
  -3 \
  --extAIA \
  --keyUsage critical,dataEncipherment,keyEncipherment,digitalSignature \
