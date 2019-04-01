@@ -136,7 +136,8 @@ checking the `/usr/share/rpmtestbase` should still report version 1:
 
 ### Updating to a package with corrupt signature (case b)
 
-To validate that `yum` will not let you update to an unsigned package, run:
+To validate that `yum` will not let you update to a package with a corrupt
+signature, run:
 
     # ./v4.sh
 
@@ -162,6 +163,22 @@ Then, update normally:
     # yum upgrade
 
 Note that `yum` installs the package and version 5 is reported:
+
+    # cat /usr/share/rpmtestbase
+
+
+### Updating to a package with corrupt signature (case b, alt)
+
+To validate that `yum` will not let you update to a corrupted package, run:
+
+    # ./v6.sh
+
+Then, update normally:
+
+    # yum upgrade
+
+Press `y` to continue. Note that `yum` will not install the package, and
+checking the `/usr/share/rpmtestbase` should still report version 1:
 
     # cat /usr/share/rpmtestbase
 
