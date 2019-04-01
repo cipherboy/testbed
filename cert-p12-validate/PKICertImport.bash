@@ -282,6 +282,8 @@ function PKICertImport() {
                 PKCS12_PASSWORD="$1"
                 shift
             elif [ "x$arg" == "x--unsafe-keep-keys" ]; then
+                # If specified, keep keys imported from .p12 even when
+                # verification failed.
                 __e "Warning: --unsafe-keep-keys has been specified."
                 __e "This option allows you to keep keys imported from a .p12 when verification failed."
                 PKCS12_REMOVE_KEYS="false"
@@ -294,6 +296,7 @@ function PKICertImport() {
                 __e "This option *always* modifies the trust flag, even when the chain is unchecked."
                 PKCS12_UNSAFE="true"
             elif [ "x$arg" == "x--help" ] || [ "x$arg" == "xhelp" ]; then
+                # Show the help text.
                 return 2
             else
                 # We print help whenever the return code is 1, so we don't
@@ -380,7 +383,8 @@ function PKICertImport() {
         echo ""
         echo "Optional arguments:"
         echo "--ascii, -a: the certificate is in ASCII encoded"
-        echo "--chain, -c: check the entire PKCS12 chain; requires --pkcs12"
+        echo "--chain, -c: import the entire PKCS12 chain; requires --pkcs12"
+	echo "--leaf-only, -l: import only the leaf certificate; requires --pkcs12"
         echo "--password, -f <path>: password file for the NSS DB"
         echo "--pkcs12, -p: the certificate is a .p12/PKCS12 file"
         echo "--chain-trust, -r <flags>: trust flags to assign intermediate certificates; requires --chain"
@@ -435,7 +439,7 @@ function PKICertImport() {
         fi
     }
 
-    # Trust certificate
+    # Modify NSS DB to include the specified trust flags on the certificate.
     function _trust_cert() {
         local nickname="$1"
         local trust="$2"
@@ -570,7 +574,10 @@ function PKICertImport() {
         return 0
     }
 
-
+    # Split off relevant parts of a .p12 file: save the leaf certificate
+    # separately so we can import it with a specified nickname. Also, when
+    # --leaf-only is specified, create a new .p12 with only the leaf key and
+    # certificate.
     function _split_pkcs12() {
         local pkcs12_args=("pkcs12")
         PKCS12_CERT_PATH="$TMPBASE/certificate.crt"
@@ -652,6 +659,8 @@ function PKICertImport() {
         fi
     }
 
+    # Import certificates from a .p12 file, noting the new certificates and
+    # keys.
     function _import_pkcs12() {
         local before_certs="$TMPBASE/before_certs.txt"
         local after_certs="$TMPBASE/after_certs.txt"
@@ -681,7 +690,7 @@ function PKICertImport() {
             import_args+=("-w" "$PKCS12_PASSWORD")
         fi
 
-        # List certificates prior to import.
+        # List certificates and keys prior to import.
         __v certutil -L "${list_args[@]}"
         __v certutil -K "${list_args[@]}"
         certutil -L "${list_args[@]}" |
@@ -689,9 +698,10 @@ function PKICertImport() {
             sed "s/[[:space:]]*[$tf]*,[$tf]*,[$tf]*//g" |
             sed 's/[[:space:]]*$//g' |
             sort > "$before_certs"
-        certutil -K -d dbs/verify/ |
+        certutil -K "${list_args[@]}" |
             grep '^<[[:space:]]*[0-9]*>' |
             sed 's/^<[[:space:]]*[0-9]*>[[:space:]]*rsa//g' |
+            sed 's/[[:space:]]*$//g' |
             awk '{print $1}' |
             sort > "$before_keys"
 
@@ -707,7 +717,7 @@ function PKICertImport() {
             exit 1
         fi
 
-        # List certificates after import.
+        # List certificates and keys after import.
         __v certutil -L "${list_args[@]}"
         __v certutil -K "${list_args[@]}"
         certutil -L "${list_args[@]}" |
@@ -715,9 +725,10 @@ function PKICertImport() {
             sed "s/[[:space:]]*[$tf]*,[$tf]*,[$tf]*//g" |
             sed 's/[[:space:]]*$//g' |
             sort > "$after_certs"
-        certutil -K -d dbs/verify/ |
+        certutil -K "${list_args[@]}" |
             grep '^<[[:space:]]*[0-9]*>' |
             sed 's/^<[[:space:]]*[0-9]*>[[:space:]]*rsa//g' |
+            sed 's/[[:space:]]*$//g' |
             awk '{print $1}' |
             sort > "$after_keys"
 
@@ -725,6 +736,8 @@ function PKICertImport() {
         mapfile -t PKCS12_KEYS < <(comm -13 "$before_keys" "$after_keys")
     }
 
+    # Verify leaf nodes in a chain when --chain is specified. Also handles
+    # specifiying turst on a certificate.
     function _verify_chain() {
         local remaining_nodes=("${PKCS12_NODES[@]}")
         local validated_nodes=()
@@ -766,7 +779,7 @@ function PKICertImport() {
             done
 
             remaining_nodes=("${unvalidated_nodes[@]}")
-            post_count=${#remaining_nodes}
+            post_count=${#remaining_nodes[@]}
 
             if (( post_count == pre_count )); then
                 # Failed to make progress -- likely a bad cert chain and/or
@@ -783,18 +796,21 @@ function PKICertImport() {
         done
     }
 
+    # Remove all keys from .p12 import (error handling).
     function _remove_all_keys() {
+        # When --unsafe-keep-keys is specified, don't remove new keys.
         if [ "$PKCS12_REMOVE_KEYS" == "false" ]; then
             return 0
         fi
 
         # When we're removing all keys, we don't care about the return code;
-        # we only care that the certificates are removed...
+        # we only care that the keys are removed...
         for key in "${PKCS12_KEYS[@]}"; do
             _remove_key "$key"
         done
     }
 
+    # Remove all certificates from .p12 import (error handling).
     function _remove_all_certs() {
         # When we're removing all certificates, we don't care about the
         # return code; we only care that the certificates are removed...
