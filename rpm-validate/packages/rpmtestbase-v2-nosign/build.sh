@@ -1,8 +1,8 @@
 #!/bin/bash
 
-rm -rf /root/rpmbuild
-mkdir -p /root/rpmbuild/SOURCES
-cp rpmtestbase /root/rpmbuild/SOURCES/rpmtestbase
+rm -rf "$HOME/rpmbuild"
+mkdir -p "$HOME/rpmbuild/SOURCES"
+cp rpmtestbase "$HOME/rpmbuild/SOURCES/rpmtestbase"
 rpmbuild -ba rpmtestbase.spec
 
-cp /root/rpmbuild/RPMS/x86_64/rpmtestbase-2-2.x86_64.rpm .
+cp "$HOME/rpmbuild/RPMS/x86_64/rpmtestbase-2-2.x86_64.rpm" .

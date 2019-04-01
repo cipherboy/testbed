@@ -1,11 +1,11 @@
 #!/bin/bash
 
-rm -rf /root/rpmbuild *.rpm
-mkdir -p /root/rpmbuild/SOURCES
-cp rpmtestbase /root/rpmbuild/SOURCES/rpmtestbase
+rm -rf "$HOME/rpmbuild" *.rpm
+mkdir -p "$HOME/rpmbuild/SOURCES"
+cp rpmtestbase "$HOME/rpmbuild/SOURCES/rpmtestbase"
 rpmbuild -ba rpmtestbase.spec
 
-cp /root/rpmbuild/RPMS/x86_64/rpmtestbase-4-4.x86_64.rpm .
+cp "$HOME/rpmbuild/RPMS/x86_64/rpmtestbase-4-4.x86_64.rpm" .
 rpmsign --addsign rpmtestbase-4-4.x86_64.rpm --key-id=B903B604 --digest-algo=sha256
 rpm -Kvv rpmtestbase-4-4.x86_64.rpm
 mv rpmtestbase-4-4.x86_64.rpm orig.rpm
@@ -23,4 +23,4 @@ echo "$value"
 printf "%x" $(( value - 1 )) | xxd -r -p > 98-file-corrupt.rpm
 
 cat 00-file-top.rpm 98-file-corrupt.rpm 99-file-rest.rpm > "corrupt-$offset.rpm"
-cp corrupt-320.rpm rpmtestbase-4-4.x86_64.rpm
+cp "corrupt-$offset.rpm" rpmtestbase-4-4.x86_64.rpm
