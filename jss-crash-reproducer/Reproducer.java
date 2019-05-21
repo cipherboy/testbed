@@ -12,9 +12,12 @@ public class Reproducer {
 
         System.out.println("keys equal? " + (keyHex1.equals(keyHex2)));
 
-        String keyHex = keyHex1;
+        doSomething(keyHex1);
+        doSomething(keyHex2);
+    }
 
-        byte[] publicKeyEncoded = Hex.decodeHex(keyHex);
+    public static void doSomething(String keyHex) throws Exception {
+        byte[] publicKeyEncoded = Hex.decodeHex(keyHex.toCharArray());
         System.out.println("PublicKey: " + publicKeyEncoded);
 
         DerValue dvPublicKey = new DerValue(publicKeyEncoded);
