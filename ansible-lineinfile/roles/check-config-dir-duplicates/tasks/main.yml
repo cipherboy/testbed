@@ -8,6 +8,11 @@
     regexp: '^\s*PermitRootLogin\s'
     state: absent
 
+- name: Check if /tmp/sshd_config.d exists
+  stat:
+    path: /tmp/sshd_config.d
+  register: tmp_sshd_config_d_exists
+
 - name: Check if the key PermitRootLogin is present in /tmp/sshd_config.d
   find:
     paths:
@@ -16,6 +21,7 @@
     follow: no
     contains: '^\s*PermitRootLogin\s'
   register: PermitRootLogin_in_tmp_sshd_config_d
+  when: tmp_sshd_config_d_exists.stat.isdir is defined and tmp_sshd_config_d_exists.stat.isdir
 
 - name: Remove the key PermitRootLogin from all matched files in /tmp/sshd_config.d
   lineinfile:
