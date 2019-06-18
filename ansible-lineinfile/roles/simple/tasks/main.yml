@@ -1,0 +1,8 @@
+---
+# Tests only for the existence of a line in a file
+- name: Prevent all root login attempts via ssh
+  lineinfile:
+    path: /tmp/sshd_config
+    regexp: '^\s*PermitRootLogin\s+no\s*$'
+    line: 'PermitRootLogin no'
+    create: yes

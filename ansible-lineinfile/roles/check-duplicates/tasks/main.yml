@@ -1,0 +1,15 @@
+---
+# Tests for the existence of a key in a file; when missing, add it. When
+# present, remove it and re-add it.
+- name: Check if the key PermitRootLogin is present in /tmp/sshd_config
+  lineinfile:
+    path: /tmp/sshd_config
+    regexp: '^\s*PermitRootLogin\s'
+    state: absent
+
+- name: Prevent all root login attempts via ssh
+  lineinfile:
+    path: /tmp/sshd_config
+    regexp: '^\s*PermitRootLogin\s+no\s*$'
+    line: 'PermitRootLogin no'
+    state: present

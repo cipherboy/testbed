@@ -1,0 +1,33 @@
+---
+# Tests for the existence of a key in a file or configuration directory.
+# When missing, add it to the specified file. When present, remove it from
+# all matching files.
+- name: Check if the key PermitRootLogin is present in /tmp/sshd_config and remove it
+  lineinfile:
+    path: /tmp/sshd_config
+    regexp: '^\s*PermitRootLogin\s'
+    state: absent
+
+- name: Check if the key PermitRootLogin is present in /tmp/sshd_config.d
+  find:
+    paths:
+      - /tmp/sshd_config.d
+    recurse: yes
+    follow: no
+    contains: '^\s*PermitRootLogin\s'
+  register: PermitRootLogin_in_tmp_sshd_config_d
+
+- name: Remove the key PermitRootLogin from all matched files in /tmp/sshd_config.d
+  lineinfile:
+    path: '{{ item.path }}'
+    regexp: '^\s*PermitRootLogin\s'
+    state: absent
+  with_items: "{{ PermitRootLogin_in_tmp_sshd_config_d.files }}"
+  when: PermitRootLogin_in_tmp_sshd_config_d.matched
+
+- name: Prevent all root login attempts via ssh
+  lineinfile:
+    path: /tmp/sshd_config
+    regexp: '^\s*PermitRootLogin\s+no\s*$'
+    line: 'PermitRootLogin no'
+    state: present

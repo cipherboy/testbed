@@ -1,0 +1,7 @@
+---
+# This playbook is used to test various line-in-file solutions
+- name: lineinfile
+  hosts: all
+  remote_user: root
+  roles:
+    - check-config-dir-duplicates
