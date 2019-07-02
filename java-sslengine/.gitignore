@@ -1,0 +1,8 @@
+*.csr
+*.der
+*.crt
+*.txt
+*.bin
+*.key
+*.p12
+nssdb/

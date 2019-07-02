@@ -76,6 +76,12 @@ import javax.net.ssl.SSLEngineResult.*;
 import java.io.*;
 import java.security.*;
 import java.nio.*;
+import java.nio.channels.*;
+import java.net.*;
+
+import org.mozilla.jss.*;
+import org.mozilla.jss.ssl.*;
+import org.mozilla.jss.ssl.javax.*;
 
 public class SSLEngineSimpleDemo {
 
@@ -120,6 +126,10 @@ public class SSLEngineSimpleDemo {
     private static String trustStoreFile = "testkeys";
     private static String passwd = "password";
 
+    private ServerSocketChannel serverSocketMaster;
+    private SocketChannel serverSocket;
+    private SocketChannel clientSocket;
+
     /*
      * Main entry point for this demo.
      */
@@ -127,6 +137,8 @@ public class SSLEngineSimpleDemo {
         if (debug) {
             System.setProperty("javax.net.debug", "all");
         }
+
+        CryptoManager.initialize("nssdb/");
 
         SSLEngineSimpleDemo demo = new SSLEngineSimpleDemo();
         demo.runDemo();
@@ -138,26 +150,43 @@ public class SSLEngineSimpleDemo {
      * Create an initialized SSLContext to use for this demo.
      */
     public SSLEngineSimpleDemo() throws Exception {
+        KeyManagerFactory kmf = KeyManagerFactory.getInstance("NssX509", "Mozilla-JSS");
+        TrustManagerFactory tmf = TrustManagerFactory.getInstance("NssX509", "Mozilla-JSS");
 
-        KeyStore ks = KeyStore.getInstance("JKS");
-        KeyStore ts = KeyStore.getInstance("JKS");
-
-        char[] passphrase = passwd.toCharArray();
-
-        ks.load(new FileInputStream(keyStoreFile), passphrase);
-        ts.load(new FileInputStream(trustStoreFile), passphrase);
-
-        KeyManagerFactory kmf = KeyManagerFactory.getInstance("SunX509");
-        kmf.init(ks, passphrase);
-
-        TrustManagerFactory tmf = TrustManagerFactory.getInstance("SunX509");
-        tmf.init(ts);
-
-        SSLContext sslCtx = SSLContext.getInstance("TLS");
-
+        SSLContext sslCtx = SSLContext.getInstance("TLS", "Mozilla-JSS");
         sslCtx.init(kmf.getKeyManagers(), tmf.getTrustManagers(), null);
 
         sslc = sslCtx;
+    }
+
+    public void createSockets() throws Exception {
+        System.out.println("a");
+        serverSocketMaster = ServerSocketChannel.open();
+        serverSocketMaster.setOption(StandardSocketOptions.SO_REUSEADDR, true);
+        System.out.println(InetAddress.getLocalHost());
+        SocketAddress sa = new InetSocketAddress(InetAddress.getLocalHost(), 9998);
+        serverSocketMaster.bind(sa);
+
+        System.out.println("b");
+        clientSocket = SocketChannel.open(sa);
+        clientSocket.configureBlocking(false);
+        System.out.println("c");
+        serverSocket = serverSocketMaster.accept();
+        serverSocket.configureBlocking(false);
+        System.out.println("d");
+    }
+
+    public void writeToSocket(ByteBuffer buf, SocketChannel sock) throws Exception {
+        sock.write(buf);
+    }
+
+    public ByteBuffer readFromSocket(SocketChannel sock) throws Exception {
+        System.err.println("Read from a socket...");
+        int size = 4096;
+        ByteBuffer buf = ByteBuffer.allocate(4096);
+        int ret = sock.read(buf);
+        System.err.println("Done with read: " + ret);
+        return buf;
     }
 
     /*
@@ -178,6 +207,8 @@ public class SSLEngineSimpleDemo {
      * sections of code.
      */
     private void runDemo() throws Exception {
+        createSockets();
+
         boolean dataDone = false;
 
         createSSLEngines();
@@ -194,17 +225,34 @@ public class SSLEngineSimpleDemo {
          * to write to the output pipe, we could reallocate a larger
          * pipe, but instead we wait for the peer to drain it.
          */
+        int counter = 0;
+        int max_counter = 40;
         while (!isEngineClosed(clientEngine) ||
                 !isEngineClosed(serverEngine)) {
 
             log("================");
 
-            clientResult = clientEngine.wrap(clientOut, cTOs);
+            log("Client SSLEngine:");
+            ((JSSEngine) clientEngine).logData();
+            log("Server SSLEngine:");
+            ((JSSEngine) serverEngine).logData();
+
+            ByteBuffer cTOs2 = ByteBuffer.allocate(4096);
+            ByteBuffer sTOc2 = ByteBuffer.allocate(4096);
+
+            clientResult = clientEngine.wrap(clientOut, cTOs2);
             log("client wrap: ", clientResult);
+            log("cTOs2: " + cTOs2.position() + "/" + cTOs2.limit() + " -- " + cTOs2.remaining());
+            cTOs2.flip();
+            writeToSocket(cTOs2, clientSocket);
+            log("cTOs2: " + cTOs2.position() + "/" + cTOs2.limit() + " -- " + cTOs2.remaining());
             runDelegatedTasks(clientResult, clientEngine);
 
-            serverResult = serverEngine.wrap(serverOut, sTOc);
+            serverResult = serverEngine.wrap(serverOut, sTOc2);
             log("server wrap: ", serverResult);
+            log("sTOc2: " + sTOc2.position() + "/" + sTOc2.limit() + " -- " + sTOc2.remaining());
+            sTOc2.flip();
+            writeToSocket(sTOc2, serverSocket);
             runDelegatedTasks(serverResult, serverEngine);
 
             cTOs.flip();
@@ -212,13 +260,28 @@ public class SSLEngineSimpleDemo {
 
             log("----");
 
-            clientResult = clientEngine.unwrap(sTOc, clientIn);
+            ByteBuffer cTOs3 = readFromSocket(serverSocket);
+            ByteBuffer sTOc3 = readFromSocket(clientSocket);
+
+            log("sTOc3: " + sTOc3.position() + "/" + sTOc3.limit() + " -- " + sTOc3.remaining());
+            sTOc3.flip();
+            clientResult = clientEngine.unwrap(sTOc3, clientIn);
             log("client unwrap: ", clientResult);
+            log("sTOc3: " + sTOc3.position() + "/" + sTOc3.limit() + " -- " + sTOc3.remaining());
             runDelegatedTasks(clientResult, clientEngine);
 
-            serverResult = serverEngine.unwrap(cTOs, serverIn);
+            log("cTOs3: " + cTOs3.position() + "/" + cTOs3.limit() + " -- " + cTOs3.remaining());
+            cTOs3.flip();
+            serverResult = serverEngine.unwrap(cTOs3, serverIn);
             log("server unwrap: ", serverResult);
+            log("cTOs3: " + cTOs3.position() + "/" + cTOs3.limit() + " -- " + cTOs3.remaining());
             runDelegatedTasks(serverResult, serverEngine);
+
+            /* log("----");
+            log("clientIn: " + clientIn.position() + "/" + clientIn.limit() + " -- " + clientIn.remaining());
+            log("serverIn: " + serverIn.position() + "/" + serverIn.limit() + " -- " + serverIn.remaining());
+            log("clientOut: " + clientOut.position() + "/" + clientOut.limit() + " -- " + clientOut.remaining());
+            log("serverOut: " + serverOut.position() + "/" + serverOut.limit() + " -- " + serverOut.remaining()); */
 
             cTOs.compact();
             sTOc.compact();
@@ -249,6 +312,11 @@ public class SSLEngineSimpleDemo {
                 // serverEngine.closeOutbound();
                 dataDone = true;
             }
+
+            counter += 1;
+            if (counter == max_counter) {
+                throw new RuntimeException("Reasonably expected to be done after " + counter + " steps, but still working...");
+            }
         }
     }
 
@@ -263,13 +331,24 @@ public class SSLEngineSimpleDemo {
          */
         serverEngine = sslc.createSSLEngine();
         serverEngine.setUseClientMode(false);
-        serverEngine.setNeedClientAuth(true);
+        serverEngine.setNeedClientAuth(false);
+        serverEngine.setWantClientAuth(false);
+
+        JSSParameters server_params = new JSSParameters();
+        server_params.setAlias("sslserver");
+        server_params.setProtocols(SSLVersion.TLS_1_2, SSLVersion.TLS_1_2);
+        serverEngine.setSSLParameters(server_params);
 
         /*
          * Similar to above, but using client mode instead.
          */
         clientEngine = sslc.createSSLEngine("client", 80);
         clientEngine.setUseClientMode(true);
+
+        JSSParameters client_params = new JSSParameters();
+        client_params.setHostname("localhost");
+        client_params.setProtocols(SSLVersion.TLS_1_2, SSLVersion.TLS_1_2);
+        clientEngine.setSSLParameters(client_params);
     }
 
     /*
