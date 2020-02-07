@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html>
+    <head>
+        <title>Dogtag PKI | Browser Keygen</title>
+        <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
+        <link rel="stylesheet" href="css/materialize.css">
+
+        <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+    </head>
+    <body>
+        <nav role="navigation" class="deep-purple accent-2">
+            <div class="nav-wrapper container">
+                <a class="brand-logo">Dogtag PKI | Browser Keygen</a>
+            </div>
+        </nav>
+        <div id="content" class="container">
+            <div id="form" class="container">
+                <h3>Certificate Signing Request</h3>
+                <div class="row">
+                    <div class="col s12 input-field">
+                        <input id="Subject" type="text" class="validate">
+                        <label for="Subject">Subject</label>
+                    </div>
+                </div>
+                <div class="row">
+                    <div class="col s5 input-field">
+                        <input id="City" type="text" class="validate">
+                        <label for="City">City</label>
+                    </div>
+                    <div class="col s5 input-field">
+                        <input id="State" type="text" class="validate">
+                        <label for="State">State</label>
+                    </div>
+                    <div class="col s2 input-field">
+                        <input id="Country" type="text" class="validate">
+                        <label for="Country">Country</label>
+                    </div>
+                </div>
+                <div class="row">
+                    <div class="col s6 input-field">
+                        <input id="OrgUnit" type="text" class="validate">
+                        <label for="OrgUnit">Unit</label>
+                    </div>
+                    <div class="col s6 input-field">
+                        <input id="Org" type="text" class="validate">
+                        <label for="Org">Organization</label>
+                    </div>
+                </div>
+                <a class="waves-effect waves-light btn"><i class="material-icons left">cached</i>Generate CSR</a>
+                <a class="waves-effect waves-light btn"><i class="material-icons left">file_download</i>Save CSR</a>
+                <a class="waves-effect waves-light btn"><i class="material-icons left">file_upload</i>Load CSR</a>
+            </div>
+        </div>
+        <script src="js/app.js"></script>
+        <script src="js/materialize.js"></script>
+    </body>
+</html>
