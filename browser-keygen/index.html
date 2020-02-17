@@ -15,7 +15,16 @@
         </nav>
         <div id="content" class="container">
             <div id="form" class="container">
+                <h3>Key Generation</h3>
+                <p>Add instructions for generating keys offline.</p>
+                <a class="waves-effect waves-light btn"><i class="material-icons left">sync</i>Generate Key Pair</a>
+                <a class="waves-effect waves-light btn"><i class="material-icons left">file_upload</i>Add Private Key (KRA only)</a>
+                <a class="waves-effect waves-light btn"><i class="material-icons left">file_upload</i>Add Public Key</a>
+                <a class="waves-effect waves-light btn"><i class="material-icons left">file_upload</i>Add .p12</a>
+            </div>
+            <div id="form" class="container">
                 <h3>Certificate Signing Request</h3>
+                <a class="waves-effect waves-light btn"><i class="material-icons left">file_upload</i>Load CSR</a>
                 <div class="row">
                     <div class="col s12 input-field">
                         <input id="Subject" type="text" class="validate">
@@ -46,9 +55,14 @@
                         <label for="Org">Organization</label>
                     </div>
                 </div>
-                <a class="waves-effect waves-light btn"><i class="material-icons left">cached</i>Generate CSR</a>
+                <a class="waves-effect waves-light btn"><i class="material-icons left">sync</i>Generate CSR</a>
                 <a class="waves-effect waves-light btn"><i class="material-icons left">file_download</i>Save CSR</a>
-                <a class="waves-effect waves-light btn"><i class="material-icons left">file_upload</i>Load CSR</a>
+            </div>
+            <div id="form" class="container">
+                <h3>Submit for signing</h3>
+                <a class="waves-effect waves-light btn"><i class="material-icons left">vpn_key</i>Submit for Signing</a>
+                <a class="waves-effect waves-light btn"><i class="material-icons left">lock</i>Submit for Archival</a>
+                <a class="waves-effect waves-light btn disabled"><i class="material-icons left">file_download</i>Download Signed Certificate</a>
             </div>
         </div>
         <script src="js/app.js"></script>
