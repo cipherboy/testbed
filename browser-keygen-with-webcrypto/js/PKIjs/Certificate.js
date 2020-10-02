@@ -1,5 +1,5 @@
-import * as asn1js from "asn1js";
-import { getParametersValue, bufferToHexCodes, clearProps } from "pvutils";
+import * as asn1js from "asn1js.js";
+import { getParametersValue, bufferToHexCodes, clearProps } from "pvutils.js";
 import { getCrypto, getEngine } from "./common.js";
 import AlgorithmIdentifier from "./AlgorithmIdentifier.js";
 import RelativeDistinguishedNames from "./RelativeDistinguishedNames.js";

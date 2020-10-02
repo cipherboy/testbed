@@ -1,5 +1,5 @@
-import * as asn1js from "asn1js";
-import { utilConcatBuf } from "pvutils";
+import * as asn1js from "asn1js.js";
+import { utilConcatBuf } from "pvutils.js";
 import CryptoEngine from "./CryptoEngine.js";
 //**************************************************************************************
 //region Crypto engine related function

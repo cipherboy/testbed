@@ -1,5 +1,5 @@
-import * as asn1js from "asn1js";
-import { getParametersValue, clearProps } from "pvutils";
+import * as asn1js from "asn1js.js";
+import { getParametersValue, clearProps } from "pvutils.js";
 import AlgorithmIdentifier from "./AlgorithmIdentifier.js";
 import Certificate from "./Certificate.js";
 import RecipientIdentifier from "./RecipientIdentifier.js";

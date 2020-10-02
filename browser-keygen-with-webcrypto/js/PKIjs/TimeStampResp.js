@@ -1,5 +1,5 @@
-import * as asn1js from "asn1js";
-import { getParametersValue, clearProps } from "pvutils";
+import * as asn1js from "asn1js.js";
+import { getParametersValue, clearProps } from "pvutils.js";
 import PKIStatusInfo from "./PKIStatusInfo.js";
 import ContentInfo from "./ContentInfo.js";
 import SignedData from "./SignedData.js";

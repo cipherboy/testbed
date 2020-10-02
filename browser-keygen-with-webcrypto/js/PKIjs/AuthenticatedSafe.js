@@ -1,5 +1,5 @@
-import * as asn1js from "asn1js";
-import { getParametersValue, utilConcatBuf, clearProps } from "pvutils";
+import * as asn1js from "asn1js.js";
+import { getParametersValue, utilConcatBuf, clearProps } from "pvutils.js";
 import ContentInfo from "./ContentInfo.js";
 import SafeContents from "./SafeContents.js";
 import EnvelopedData from "./EnvelopedData.js";

@@ -1,5 +1,5 @@
-import * as asn1js from "asn1js";
-import { getParametersValue, toBase64, arrayBufferToString, stringToArrayBuffer, fromBase64, clearProps } from "pvutils";
+import * as asn1js from "asn1js.js";
+import { getParametersValue, toBase64, arrayBufferToString, stringToArrayBuffer, fromBase64, clearProps } from "pvutils.js";
 import OtherPrimeInfo from "./OtherPrimeInfo.js";
 //**************************************************************************************
 /**

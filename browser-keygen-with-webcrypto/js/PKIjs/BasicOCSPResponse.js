@@ -1,5 +1,5 @@
-import * as asn1js from "asn1js";
-import { getParametersValue, isEqualBuffer, clearProps } from "pvutils";
+import * as asn1js from "asn1js.js";
+import { getParametersValue, isEqualBuffer, clearProps } from "pvutils.js";
 import { getAlgorithmByOID, getCrypto, getEngine } from "./common.js";
 import ResponseData from "./ResponseData.js";
 import AlgorithmIdentifier from "./AlgorithmIdentifier.js";

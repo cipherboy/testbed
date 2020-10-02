@@ -1,5 +1,5 @@
-import * as asn1js from "asn1js";
-import { getParametersValue, utilConcatBuf, isEqualBuffer, toBase64, fromBase64, arrayBufferToString, stringToArrayBuffer } from "pvutils";
+import * as asn1js from "asn1js.js";
+import { getParametersValue, utilConcatBuf, isEqualBuffer, toBase64, fromBase64, arrayBufferToString, stringToArrayBuffer } from "pvutils.js";
 //**************************************************************************************
 /**
  * Class from RFC5480

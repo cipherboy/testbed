@@ -1,5 +1,5 @@
-import * as asn1js from "asn1js";
-import { getParametersValue, stringToArrayBuffer, arrayBufferToString, utilConcatBuf } from "pvutils";
+import * as asn1js from "asn1js.js";
+import { getParametersValue, stringToArrayBuffer, arrayBufferToString, utilConcatBuf } from "pvutils.js";
 import { createCMSECDSASignature, createECDSASignatureFromCMS } from "./common.js";
 import PublicKeyInfo from "./PublicKeyInfo.js";
 import PrivateKeyInfo from "./PrivateKeyInfo.js";

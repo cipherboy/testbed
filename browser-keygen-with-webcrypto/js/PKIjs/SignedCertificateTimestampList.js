@@ -1,5 +1,5 @@
-import * as asn1js from "asn1js";
-import { getParametersValue, utilFromBase, utilToBase, bufferToHexCodes, toBase64, fromBase64, arrayBufferToString, stringToArrayBuffer } from "pvutils";
+import * as asn1js from "asn1js.js";
+import { getParametersValue, utilFromBase, utilToBase, bufferToHexCodes, toBase64, fromBase64, arrayBufferToString, stringToArrayBuffer } from "pvutils.js";
 import { ByteStream, SeqStream } from "bytestreamjs";
 import { getCrypto, getEngine } from "./common.js";
 import PublicKeyInfo from "./PublicKeyInfo.js";

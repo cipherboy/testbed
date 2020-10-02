@@ -1,5 +1,5 @@
-import * as asn1js from "asn1js";
-import { getParametersValue, clearProps } from "pvutils";
+import * as asn1js from "asn1js.js";
+import { getParametersValue, clearProps } from "pvutils.js";
 //**************************************************************************************
 /**
  * Class from RFC3161. Accuracy represents the time deviation around the UTC time contained in GeneralizedTime.

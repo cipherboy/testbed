@@ -1,5 +1,5 @@
-import * as asn1js from "asn1js";
-import { getParametersValue, utilConcatBuf, isEqualBuffer, clearProps } from "pvutils";
+import * as asn1js from "asn1js.js";
+import { getParametersValue, utilConcatBuf, isEqualBuffer, clearProps } from "pvutils.js";
 import { getCrypto, getEngine, getOIDByAlgorithm, getAlgorithmByOID } from "./common.js";
 import AlgorithmIdentifier from "./AlgorithmIdentifier.js";
 import EncapsulatedContentInfo from "./EncapsulatedContentInfo.js";

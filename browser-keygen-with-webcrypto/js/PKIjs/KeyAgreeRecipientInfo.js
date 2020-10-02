@@ -1,5 +1,5 @@
-import * as asn1js from "asn1js";
-import { getParametersValue, clearProps } from "pvutils";
+import * as asn1js from "asn1js.js";
+import { getParametersValue, clearProps } from "pvutils.js";
 import OriginatorIdentifierOrKey from "./OriginatorIdentifierOrKey.js";
 import AlgorithmIdentifier from "./AlgorithmIdentifier.js";
 import RecipientEncryptedKeys from "./RecipientEncryptedKeys.js";

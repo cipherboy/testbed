@@ -1,5 +1,5 @@
-import * as asn1js from "asn1js";
-import { getParametersValue, clearProps } from "pvutils";
+import * as asn1js from "asn1js.js";
+import { getParametersValue, clearProps } from "pvutils.js";
 import SubjectDirectoryAttributes from "./SubjectDirectoryAttributes.js";
 import PrivateKeyUsagePeriod from "./PrivateKeyUsagePeriod.js";
 import AltName from "./AltName.js";

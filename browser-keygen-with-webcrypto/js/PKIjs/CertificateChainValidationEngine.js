@@ -1,4 +1,4 @@
-import { getParametersValue, isEqualBuffer } from "pvutils";
+import { getParametersValue, isEqualBuffer } from "pvutils.js";
 import { getAlgorithmByOID, stringPrep } from "./common.js";
 //**************************************************************************************
 export default class CertificateChainValidationEngine

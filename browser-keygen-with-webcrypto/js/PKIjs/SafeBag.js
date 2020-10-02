@@ -1,5 +1,5 @@
-import * as asn1js from "asn1js";
-import { getParametersValue, clearProps } from "pvutils";
+import * as asn1js from "asn1js.js";
+import { getParametersValue, clearProps } from "pvutils.js";
 import Attribute from "./Attribute.js";
 import PrivateKeyInfo from "./PrivateKeyInfo.js";
 import PKCS8ShroudedKeyBag from "./PKCS8ShroudedKeyBag.js";

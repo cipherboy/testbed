@@ -1,5 +1,5 @@
-import * as asn1js from "asn1js";
-import { getParametersValue, utilConcatBuf, clearProps } from "pvutils";
+import * as asn1js from "asn1js.js";
+import { getParametersValue, utilConcatBuf, clearProps } from "pvutils.js";
 import { getOIDByAlgorithm, getRandomValues, getCrypto, getAlgorithmByOID, kdf } from "./common.js";
 import OriginatorInfo from "./OriginatorInfo.js";
 import RecipientInfo from "./RecipientInfo.js";

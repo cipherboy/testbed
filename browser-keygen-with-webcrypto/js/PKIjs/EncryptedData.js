@@ -1,5 +1,5 @@
-import * as asn1js from "asn1js";
-import { getParametersValue, clearProps } from "pvutils";
+import * as asn1js from "asn1js.js";
+import { getParametersValue, clearProps } from "pvutils.js";
 import { getEngine } from "./common.js";
 import EncryptedContentInfo from "./EncryptedContentInfo.js";
 import Attribute from "./Attribute.js";

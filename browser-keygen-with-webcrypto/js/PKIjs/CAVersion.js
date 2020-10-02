@@ -1,5 +1,5 @@
-import * as asn1js from "asn1js";
-import { getParametersValue, utilConcatBuf } from "pvutils";
+import * as asn1js from "asn1js.js";
+import { getParametersValue, utilConcatBuf } from "pvutils.js";
 //**************************************************************************************
 /**
  * Class from https://docs.microsoft.com/en-us/windows/desktop/seccrypto/certification-authority-renewal
