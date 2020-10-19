@@ -5,9 +5,9 @@
         <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
     </head>
     <body>
-        <nav role="navigation" class="deep-purple accent-2">
+        <nav class="deep-purple accent-2">
             <div class="nav-wrapper container">
-                <a class="brand-logo">Dogtag PKI | Browser Keygen</button>
+                <a href="https://www.dogtagpki.org" class="brand-logo">Dogtag PKI | Browser Keygen</a>
             </div>
         </nav>
         <div id="content" class="container">
@@ -15,7 +15,53 @@
                 <h3>(DEMO) Generate CA</h3>
                 <p>This won't be here ordinarily.</p>
                 <div class="input-field">
-                    <select id="keytype" onChange="changeCAKeySize()">
+                    <select id="ca-keytype" onChange="changeCAKeySize()">
+                        <option value="RSA">RSA</option>
+                        <option value="ECDSA">ECDSA</option>
+                    </select>
+                    <label>CA Key Type</label>
+                </div>
+                <div class="input-field">
+                    <select id="ca-keysize-rsa">
+                        <option value="2048">2048</option>
+                        <option value="3072">3072</option>
+                        <option value="4096">4096</option>
+                    </select>
+                    <select id="ca-keysize-ecdsa">
+                        <option value="P-256">P-256</option>
+                        <option value="P-384">P-384</option>
+                        <option value="P-521">P-521</option>
+                    </select>
+                    <label>CA Key Size</label>
+                </div>
+                <p id='ca-keys'></p>
+                <script>
+                    function changeCAKeySize() {
+                        var input = document.getElementById('ca-keytype');
+                        if (input.value == 'RSA') {
+                            document.getElementById('ca-keysize-rsa').style.display = 'block';
+                            document.getElementById('ca-keysize-ecdsa').style.display = 'none';
+                        } else {
+                            document.getElementById('ca-keysize-rsa').style.display = 'none';
+                            document.getElementById('ca-keysize-ecdsa').style.display = 'block';
+                        }
+                    }
+                    changeCAKeySize();
+
+                    async function genCA() {
+                        var type = document.getElementById('ca-keytype').value.toLowerCase();
+                        var size = document.getElementById('ca-keysize-' + type).value;
+                        window.ca_keys = await generate(type === 'rsa', size, size);
+                        document.getElementById('ca-keys').innerText = 'Generated new ' + type + ' CA keys.';
+                    }
+                </script>
+                <button onClick="genCA()">Generate Key Pair</button>
+            </div>
+            <div class="container form">
+                <h3>Key Generation</h3>
+                <p>Add instructions for generating keys offline.</p>
+                <div class="input-field">
+                    <select id="keytype" onChange="changeKeySize()">
                         <option value="RSA">RSA</option>
                         <option value="ECDSA">ECDSA</option>
                     </select>
@@ -34,10 +80,9 @@
                     </select>
                     <label>CA Key Size</label>
                 </div>
-                <p id='ca-keys'>
-                </p>
+                <p id='user-keys'></p>
                 <script>
-                    function changeCAKeySize() {
+                    function changeKeySize() {
                         var input = document.getElementById('keytype');
                         if (input.value == 'RSA') {
                             document.getElementById('keysize-rsa').style.display = 'block';
@@ -47,28 +92,23 @@
                             document.getElementById('keysize-ecdsa').style.display = 'block';
                         }
                     }
-                    changeCAKeySize();
+                    changeKeySize();
 
-                    async function genCA() {
+                    async function genKey() {
                         var type = document.getElementById('keytype').value.toLowerCase();
                         var size = document.getElementById('keysize-' + type).value;
-                        window.ca_keys = await generate(type === 'rsa', size, size);
-                        document.getElementById('ca-keys').innerText = 'Generated new ' + type + ' CA keys.';
+                        window.user_keys = await generate(type === 'rsa', size, size, ['encrypt', 'decrypt']);
+                        document.getElementById('user-keys').innerText = 'Generated new ' + type + ' user keys.';
                     }
                 </script>
-                <button onClick="genCA()">Generate Key Pair</button>
-            </div>
-            <div class="container form">
-                <h3>Key Generation</h3>
-                <p>Add instructions for generating keys offline.</p>
-                <button onClick="generate(true, 4096);">Generate Key Pair</button>
-                <button>Add Private Key (KRA only)</button>
-                <button>Add Public Key</button>
-                <button>Add .p12</button>
+                <button onClick="genKey()">Generate Key Pair</button>
+                <button disabled>Add Private Key (KRA only)</button>
+                <button disabled>Add Public Key</button>
+                <button disabled>Add .p12</button>
             </div>
             <div class="container form">
                 <h3>Certificate Signing Request</h3>
-                <button>Load CSR</button>
+                <button disabled>Load CSR</button>
                 <div class="row">
                     <div class="col s12 input-field">
                         <input id="Subject" type="text" class="validate">
@@ -99,8 +139,13 @@
                         <label for="Org">Organization</label>
                     </div>
                 </div>
+                <script>
+                    async function genCSR() {
+
+                    }
+                </script>
                 <button>Generate CSR</button>
-                <button>Save CSR</button>
+                <button disabled>Save CSR</button>
             </div>
             <div class="container form">
                 <h3>Submit for signing</h3>
@@ -110,5 +155,6 @@
             </div>
         </div>
         <script src="js/app.js"></script>
+        <script src="js/PKIjs/index.js" type="module"></script>
     </body>
 </html>
