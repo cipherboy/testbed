@@ -1,6 +1,13 @@
 import React from 'react';
 import './App.css';
 
+import * as asn1js from "asn1js";
+import { arrayBufferToString, toBase64 } from "pvutils";
+import {
+  Attribute, AttributeTypeAndValue, CertificationRequest,
+  Certificate, Extension, Extensions
+} from "pkijs";
+
 class KeyGen extends React.Component {
   constructor(props) {
     super(props);
@@ -56,7 +63,8 @@ class CAKeyGen extends KeyGen {
         <h3>(DEMO ONLY) Generate CA Keys (DEMO ONLY)</h3>
         <p>
           This won't be here ordinarily. This just exists to make this demo
-          testable with <a href="https://fortifyapp.com/">Fortify</a>.
+          testable with <a href="https://fortifyapp.com/">Fortify</a>, without
+          needing a RHCS instance.
         </p>
         <div className="input-field">
           <label htmlFor="ca-keytype">CA Key Type</label>
@@ -178,43 +186,119 @@ class CSRForm extends React.Component {
     this.setState((state) => Object.assign({}, state, changed));
   }
 
-  generate() {
-    return null;
+  async generate() {
+    let pkcs10 = new CertificationRequest();
+
+    pkcs10.version = 0;
+
+    // Set the CSR's Subject
+    pkcs10.subject.typesAndValues.push(
+      new AttributeTypeAndValue({
+        type: "2.5.4.3",
+        value: new asn1js.PrintableString({ value: this.state.subject }),
+      })
+    );
+
+    // Import key
+    pkcs10.subjectPublicKeyInfo.importKey(this.props.cert_keys.publicKey);
+
+    // Set the SKI identifier
+    pkcs10.attributes = [];
+    var checksum = await crypto.subtle.digest(
+      { name: "SHA-256" },
+      pkcs10.subjectPublicKeyInfo.subjectPublicKey.valueBlock.valueHex
+    );
+
+    pkcs10.attributes.push(
+      new Attribute({
+        type: "1.2.840.113549.1.9.14", // pkcs-9-at-extensionRequest
+        values: [(
+          new Extensions({
+            extensions: [
+              new Extension({
+                extnID: "2.5.29.14",
+                critical: false,
+                extnValue: (new asn1js.OctetString({ valueHex: checksum })).toBER(false)
+              })
+            ]
+          })).toSchema()
+        ]
+      })
+    );
+
+    // Self-sign to finish the CSR.
+    await pkcs10.sign(this.props.cert_keys.privateKey, "SHA-256");
+
+    // var bytes = await pkcs10.toSchema().toBER(false);
+    this.props.setCSR(pkcs10);
   }
 
   render() {
     return (
-      <div id="cert-csr-form">
-        <h3>Certificate Signing Request</h3>
+      <form id="cert-csr-form" onSubmit={ (event) => { event.preventDefault() ; this.generate() } }>
+        <h3>Generate Certificate Signing Request</h3>
         <p>
           In the future, this section will include additional fields and allow
-          the user to specify a CSR to upload.
+          the user to specify a local CSR to read via a form.
         </p>
         <div className="input-field">
           <label htmlFor="Subject">Subject</label>
           <input name="Subject" type="text" value={ this.subject } onChange={ (event) => this.setFormValue("subject", event.target.value) } />
         </div>
-        <div className="input-field">
-          <label htmlFor="City">City</label>
-          <input name="City" type="text" value={ this.city } onChange={ (event) => this.setFormValue("city", event.target.value) } />
-        </div>
-        <div className="input-field">
-          <label htmlFor="State">State</label>
-          <input name="State" type="text" value={ this.state } onChange={ (event) => this.setFormValue("state", event.target.value) } />
-        </div>
-        <div className="input-field">
-          <label htmlFor="Country">Country</label>
-          <input name="Country" type="text" value={ this.country } onChange={ (event) => this.setFormValue("country", event.target.value) } />
-        </div>
-        <div className="input-field">
-          <label htmlFor="OrgUnit">Organization Unit</label>
-          <input name="OrgUnit" type="text" value={ this.orgunit } onChange={ (event) => this.setFormValue("orgunit", event.target.value) } />
-        </div>
-        <div className="input-field">
-          <label htmlFor="Org">Organization</label>
-          <input name="Org" type="text" value={ this.org } onChange={ (event) => this.setFormValue("org", event.target.value) } />
-        </div>
-        <button onClick={ () => this.generate() }>Generate CSR</button>
+        <button>Generate CSR</button>
+      </form>
+    );
+  }
+}
+
+class SignForm extends React.Component {
+  async generate() {
+    var signed = new Certificate();
+
+    console.log(signed, signed.toJSON());
+
+    // Serial number is required.
+    signed.version = 0;
+    signed.serialNumber = new asn1js.Integer({ value: 42 });
+
+    // Keep cert expiration short and simple.
+    var expiration = new Date();
+    expiration.setDate(expiration.getDate() + 5);
+    signed.notBefore.value = new Date();
+    signed.notAfter.value = expiration;
+
+    // Add faked issuer information.
+    signed.issuer.typesAndValues.push(new AttributeTypeAndValue({
+        type: "2.5.4.3", // Country name
+        value: new asn1js.PrintableString({ value: "RHCS-DEMO" })
+    }));
+
+    signed.subject = this.props.csr.subject;
+    signed.subjectPublicKeyInfo = this.props.csr.subjectPublicKeyInfo;
+
+    console.log(signed, signed.toJSON());
+    console.log(signed, toBase64(arrayBufferToString(signed.encodeTBS().toBER(false))));
+
+    // Self-sign to finish the certificate.
+    await signed.sign(this.props.ca_keys.privateKey, "SHA-256");
+    // await signed.verify(this.props.ca_keys.publicKey);
+
+    console.log(signed.toJSON());
+
+    var bytes = await signed.toSchema().toBER(false);
+    this.props.setCert(bytes);
+  }
+
+  render () {
+    return (
+      <div id="cert-submission">
+        <h3>Sign CSR</h3>
+        <p>
+          In the future, this will submit the CSR with the correct profile and
+          additional data to RHCS. Currently we're doing it locally to test if
+          this will work with smart cards.
+        </p>
+        <button onClick={ () => this.generate() }>Sign CSR with CA</button>
       </div>
     );
   }
@@ -227,6 +311,8 @@ class App extends React.Component {
     this.state = {
       ca_keys: null,
       cert_keys: null,
+      csr: null,
+      cert: null,
     };
   }
 
@@ -236,6 +322,34 @@ class App extends React.Component {
 
   setCertKeys(keys) {
     this.setState((state) => Object.assign({}, state, { cert_keys: keys }));
+  }
+
+  setCSR(csr) {
+    this.setState((state) => Object.assign({}, state, { csr }));
+  }
+
+  setCert(cert) {
+    this.setState((state) => Object.assign({}, state, { cert }));
+  }
+
+  toPEM(data) {
+    var result = "";
+    var line = "";
+
+    for (let char of data) {
+      if (line.length >= 64) {
+        result += line += "\r\n";
+        line = "";
+      }
+
+      line += char;
+    }
+
+    if (line !== "") {
+      result += line += "\r\n";
+    }
+
+    return result;
   }
 
   render() {
@@ -257,7 +371,27 @@ class App extends React.Component {
                       <h3>Remove Cert Keys</h3>
                       <button onClick={ () => this.setCertKeys(null) }>Delete Cert Keys</button>
                     </div>
-                    <CSRForm />
+                    {
+                      this.state.csr === null
+                      ? <CSRForm cert_keys={ this.state.cert_keys } setCSR={ this.setCSR.bind(this) } />
+                      : <>
+                        {
+                          this.state.cert === null
+                          ? <SignForm ca_keys={ this.state.ca_keys } cert_keys={ this.state.cert_keys } csr={ this.state.csr } setCert={ this.setCert.bind(this) } />
+                          : <>
+                              <h3>Now check that the keys (CA and Cert) were created on the card.</h3>
+                              <p>For reference, this is the signed end-entity certificate below. For now, the generated CA certificate isn't included.</p>
+                              <pre>
+{
+  "-----BEGIN CERTIFICATE-----\r\n" +
+  this.toPEM(toBase64(arrayBufferToString(this.state.cert))) +
+  "-----END CERTIFICATE-----"
+}
+                              </pre>
+                            </>
+                        }
+                        </>
+                    }
                   </>
               }
             </>
