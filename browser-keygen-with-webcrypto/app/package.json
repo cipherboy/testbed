@@ -22,8 +22,7 @@
   },
   "browserslist": {
     "production": [
-      ">0.01%",
-      "all"
+      ">0.01%"
     ],
     "development": [
       "last 10 chrome version",
