@@ -5,7 +5,7 @@ source libs.sh
 (
   rm -rf experiments ; mkdir -p experiments ; cd experiments
 
-  set -x
+  set -ex
 
   mkdir -p leaves
 
@@ -31,4 +31,16 @@ source libs.sh
 
   crosssign root-new inter-a
   crosssign root-old root-new
+  crosssign root-old inter-b
+
+  # Validate chain constructions against multiple validation implementations.
+  shouldvalidate www.example.com leaves/www.example.com.crt inter-a -- root-old
+  shouldvalidate www.example.com leaves/www.example.com.crt inter-a -- root-old root-new
+  shouldvalidate www.example.com leaves/www.example.com.crt cross-root-new:inter-a -- root-new
+  shouldvalidate www.example.com leaves/www.example.com.crt cross-root-new:inter-a -- root-new root-old
+  shouldvalidate www.example.com leaves/www.example.com.crt inter-a cross-root-new:inter-a -- root-new
+  shouldvalidate www.example.com leaves/www.example.com.crt cross-root-new:inter-a inter-a -- root-old # OpenSSL requires inter-a to be after cross-root-new:inter-a for verification to succeed
+  shouldvalidate www.example.com leaves/www.example.com.crt inter-a cross-root-new:inter-a -- root-new root-old
+  shouldvalidate www.example.com leaves/www.example.com.crt cross-root-new:inter-a cross-root-old:root-new -- root-old
+  shouldvalidate www.example.com leaves/www.example.com.crt cross-root-new:inter-a cross-root-old:root-new -- root-old root-new
 )
