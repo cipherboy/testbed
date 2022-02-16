@@ -112,17 +112,18 @@ commonName = $name
 
 [ v3_ca ]
 subjectKeyIdentifier = hash
-authorityKeyIdentifier = keyid:always,issuer:always
+authorityKeyIdentifier = keyid:always
 basicConstraints = CA:true
 subjectAltName=email:move
-
+keyUsage = critical, cRLSign, digitalSignature, keyCertSign
+extendedKeyUsage = serverAuth
 
 [ server_cert ]
 basicConstraints = CA:FALSE
 nsCertType = server
 nsComment = "OpenSSL Generated Server Certificate"
 subjectKeyIdentifier = hash
-authorityKeyIdentifier = keyid,issuer:always
+authorityKeyIdentifier = keyid:always
 keyUsage = critical, digitalSignature, keyEncipherment
 extendedKeyUsage = serverAuth
 _EOF
@@ -204,17 +205,18 @@ commonName = $name
 
 [ v3_ca ]
 subjectKeyIdentifier = hash
-authorityKeyIdentifier = keyid:always,issuer:always
+authorityKeyIdentifier = keyid:always
 basicConstraints = CA:true
 subjectAltName=email:move
-
+keyUsage = critical, cRLSign, digitalSignature, keyCertSign
+extendedKeyUsage = serverAuth
 
 [ server_cert ]
 basicConstraints = CA:FALSE
 nsCertType = server
 nsComment = "OpenSSL Generated Server Certificate"
 subjectKeyIdentifier = hash
-authorityKeyIdentifier = keyid,issuer:always
+authorityKeyIdentifier = keyid:always
 keyUsage = critical, digitalSignature, keyEncipherment
 extendedKeyUsage = serverAuth
 _EOF
@@ -323,9 +325,16 @@ shouldvalidate() {(
   truncate -s 0 "$out_chain"
   local out_trust="$dir/trust.pem"
   truncate -s 0 "$out_trust"
+  local passwd="$dir/passwd"
+  echo "SECret.123" > "$passwd"
+  local nssdb="$dir/nssdb"
+  mkdir "$dir/nssdb"
+  certutil -N -d "$nssdb" -f "$passwd"
+  local leaf_nick=""
 
   # Build a chain file.
   for cert in "${chain_certs[@]}"; do
+    local cur="$dir/curr.crt"
     if [[ $cert = cross-* ]]; then
       local cross_name="${cert//:*/}"
       local ca_name="${cert//*:/}"
@@ -335,37 +344,49 @@ shouldvalidate() {(
         exit 1
       fi
 
-      openssl x509 -in "ca/$ca_name/certs/$cross_name.pem" >> "$out_chain"
+      openssl x509 -in "ca/$ca_name/certs/$cross_name.pem" > "$cur"
     elif [ -e "$cert" ]; then
-      openssl x509 -in "$cert" >> "$out_chain"
+      openssl x509 -in "$cert" > "$cur"
     elif [ -e "ca/$cert/certs/ca.pem" ]; then
-      openssl x509 -in "ca/$cert/certs/ca.pem" >> "$out_chain"
+      openssl x509 -in "ca/$cert/certs/ca.pem" > "$cur"
     else
       echo "Cert not found: $cert" 1>&2
       return 1 >/dev/null 2>&1
       exit 1
+    fi
+
+    local nick="chain-$RANDOM"
+    cat "$cur" >> "$out_chain"
+    certutil -A -n "$nick" -f "$passwd" -d "$nssdb" -t ,, -a -i "$cur"
+
+    if [ -z "$leaf_nick" ]; then
+      leaf_nick="$nick"
     fi
   done
 
   for cert in "${root_certs[@]}"; do
+    local cur="$dir/curr.crt"
     if [ -e "$cert" ]; then
-      openssl x509 -in "$cert" >> "$out_trust"
+      openssl x509 -in "$cert" > "$cur"
     elif [ -e "ca/$cert/certs/ca.pem" ]; then
-      openssl x509 -in "ca/$cert/certs/ca.pem" >> "$out_trust"
+      openssl x509 -in "ca/$cert/certs/ca.pem" > "$cur"
     else
       echo "Cert not found: $cert" 1>&2
       return 1 >/dev/null 2>&1
       exit 1
     fi
+
+    cat "$cur" >> "$out_trust"
+    certutil -A -n "trust-$RANDOM" -f "$passwd" -d "$nssdb" -t CT,CT,CT -a -i "$cur"
   done
 
-  validate_openssl "$name" "$out_chain" "$out_trust"
+  validate_openssl "$out_chain" "$out_trust"
+  validate_nss "$nssdb" "$passwd" "$leaf"
 )}
 
 validate_openssl() {(
-  local name="$1"
-  local chain="$2"
-  local root="$3"
+  local chain="$1"
+  local root="$2"
 
   set -e
 
@@ -381,4 +402,20 @@ for cert in reversed(certs):
     print(cert, end="")' < "$chain" > "$chain.openssl"
 
   openssl verify -verbose -CAfile "$root" -issuer_checks -check_ss_sig -purpose sslserver -x509_strict -policy_print "$chain.openssl"
+)}
+
+validate_nss() {(
+  local nssdb="$1"
+  local passwd="$2"
+  local leaf="$3"
+
+  set -e
+
+  /usr/lib64/nss/unsupported-tools/vfychain -d "$nssdb" -p -a "$leaf"
+
+  # certutil -V lacks support for advanced chain building; specifying -p above
+  # causes vfychain to use libpkix instead of the original NSS chain building.
+  # Firefox behaves more like libpkix, but uses an alternative version written
+  # in Rust.
+  #certutil -V -d "$nssdb" -p "$passwd" -n "$leaf" -u V
 )}
