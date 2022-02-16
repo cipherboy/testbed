@@ -3,6 +3,10 @@
 source libs.sh
 
 (
+  rm -rf verify_certificate
+  go build ./verify_certificate.go
+  export PATH="$PWD:$PATH"
+
   rm -rf experiments ; mkdir -p experiments ; cd experiments
 
   set -ex

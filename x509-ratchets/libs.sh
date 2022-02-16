@@ -26,7 +26,7 @@ ca() {(
   fi
 
   set -e
-  openssl ca -batch -config "ca/$ca/config" "$@"
+  openssl ca -verbose -batch -config "ca/$ca/config" "$@"
 )}
 
 req() {(
@@ -40,7 +40,7 @@ req() {(
   fi
 
   set -e
-  openssl req -config "ca/$ca/config" "$@"
+  openssl req -verbose -config "ca/$ca/config" "$@"
 )}
 
 initca() {(
@@ -114,7 +114,6 @@ commonName = $name
 subjectKeyIdentifier = hash
 authorityKeyIdentifier = keyid:always
 basicConstraints = CA:true
-subjectAltName=email:move
 keyUsage = critical, cRLSign, digitalSignature, keyCertSign
 extendedKeyUsage = serverAuth
 
@@ -126,6 +125,10 @@ subjectKeyIdentifier = hash
 authorityKeyIdentifier = keyid:always
 keyUsage = critical, digitalSignature, keyEncipherment
 extendedKeyUsage = serverAuth
+subjectAltName = @alt_names
+
+[ alt_names ]
+DNS.0 =
 _EOF
 
   req "$name" -new -key "ca/$name/private/private.pem" -out "ca/$name/reqs/ca.csr" -subj "/CN=$name"
@@ -207,7 +210,6 @@ commonName = $name
 subjectKeyIdentifier = hash
 authorityKeyIdentifier = keyid:always
 basicConstraints = CA:true
-subjectAltName=email:move
 keyUsage = critical, cRLSign, digitalSignature, keyCertSign
 extendedKeyUsage = serverAuth
 
@@ -219,6 +221,10 @@ subjectKeyIdentifier = hash
 authorityKeyIdentifier = keyid:always
 keyUsage = critical, digitalSignature, keyEncipherment
 extendedKeyUsage = serverAuth
+subjectAltName = @alt_names
+
+[ alt_names ]
+DNS.0 =
 _EOF
 
   req "$parent" -new -key "ca/$name/private/private.pem" -out "ca/$name/reqs/ca.csr" -subj "/CN=$name"
@@ -241,6 +247,9 @@ signcsr() {(
   fi
 
   set -e
+
+  # sed 's/commonName.*=.*/commonName = '"$cn"'/g' -i "ca/$ca/config"
+  sed 's/DNS.*=.*/DNS.0 = '"$cn"'/g' -i "ca/$ca/config"
 
   serial="$(cat "ca/$ca/serial")"
   req "$ca" -new -key "keys/$key.priv" -out "ca/$ca/reqs/$serial.csr" -subj "/CN=$cn"
@@ -382,6 +391,7 @@ shouldvalidate() {(
 
   validate_openssl "$out_chain" "$out_trust"
   validate_nss "$nssdb" "$passwd" "$leaf"
+  validate_golang "$name" "$leaf" "$out_chain" "$out_trust"
 )}
 
 validate_openssl() {(
@@ -411,11 +421,22 @@ validate_nss() {(
 
   set -e
 
-  /usr/lib64/nss/unsupported-tools/vfychain -d "$nssdb" -p -a "$leaf"
+  /usr/lib64/nss/unsupported-tools/vfychain -d "$nssdb" -p -u 1 -a "$leaf"
 
   # certutil -V lacks support for advanced chain building; specifying -p above
   # causes vfychain to use libpkix instead of the original NSS chain building.
   # Firefox behaves more like libpkix, but uses an alternative version written
   # in Rust.
   #certutil -V -d "$nssdb" -p "$passwd" -n "$leaf" -u V
+)}
+
+validate_golang() {(
+  local host="$1"
+  local leaf="$2"
+  local chain="$3"
+  local trust="$4"
+
+  set -e
+
+  verify_certificate "$host" "$leaf" "$chain" "$trust"
 )}
