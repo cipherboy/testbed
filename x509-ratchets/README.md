@@ -141,3 +141,16 @@ chain of trust document!
    ratchet.
  - The link from `ISRG Root X1` to `R3` (which was originally signed by
    `DST Root CA X3`) is an example of a backwards ratchet.
+
+# Limitations
+
+The [Authority Key Identifier](https://datatracker.ietf.org/doc/html/rfc5280#section-4.2.1.1)
+field may contain either or both of the issuer's keyIdentifier (a hash
+of the public key) or both the issuer's Subject and Serial Number fields.
+Generating certificates with the latter enabled prevents building a proper
+cross-signed chain without re-issuing for the same serial number, which is
+generally frowned upon. In the strictest sense, when cross-signing from a
+different CA, the intermediate could be reissued with the same serial number,
+assuming no previous certificate was issued by that CA with that serial,
+but this does not work for reissued self-signed roots (as these must contain
+distinct serial numbers else we risk breaking various assumptions in browsers).
