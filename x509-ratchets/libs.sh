@@ -46,30 +46,40 @@ req() {(
 initca() {(
   local key="$1"
   local name="$2"
+  local dir="$3"
+  local serial="$4"
 
   if [ -z "$key" ] || [ -z "$name" ]; then
-    echo "Usage: initca KEY-NAME CA-NAME"
+    echo "Usage: initca KEY-NAME CA-NAME [DIRECTORY] [SERIAL]"
     return 1 >/dev/null 2>&1
     exit 1
   fi
 
-  mkdir -p "ca/$name"/{certs,reqs,private}
+  if [ -z "$dir" ]; then
+    dir="$name"
+  fi
+
+  if [ -z "$serial" ]; then
+    serial="01"
+  fi
+
+  mkdir -p "ca/$dir"/{certs,reqs,private}
   set -e
 
   # Setup flat db, copy existing private key
-  touch "ca/$name/index.txt"
-  cp "keys/$key.priv" "ca/$name/private/private.pem"
-  echo "01" > "ca/$name/serial"
+  touch "ca/$dir/index.txt"
+  cp "keys/$key.priv" "ca/$dir/private/private.pem"
+  echo "$serial" > "ca/$dir/serial"
 
   # From https://jamielinux.com/docs/openssl-certificate-authority/appendix/root-configuration-file.html
   # and https://www.phildev.net/ssl/creating_ca.html
-  cat > "ca/$name/config" <<_EOF
+  cat > "ca/$dir/config" <<_EOF
 [ ca ]
 default_ca = CA_default
 
 [ CA_default ]
 # Directory and file locations.
-dir               = $PWD/ca/$name
+dir               = $PWD/ca/$dir
 certs             = \$dir/certs
 crl_dir           = \$dir/crl
 new_certs_dir     = \$dir/certs
@@ -131,8 +141,8 @@ subjectAltName = @alt_names
 DNS.0 =
 _EOF
 
-  req "$name" -new -key "ca/$name/private/private.pem" -out "ca/$name/reqs/ca.csr" -subj "/CN=$name"
-  ca "$name" -out "ca/$name/certs/ca.pem" -selfsign -extensions v3_ca -subj "/CN=$name" -infiles "ca/$name/reqs/ca.csr"
+  req "$dir" -new -key "ca/$dir/private/private.pem" -out "ca/$dir/reqs/ca.csr" -subj "/CN=$name"
+  ca "$dir" -out "ca/$dir/certs/ca.pem" -selfsign -extensions v3_ca -subj "/CN=$name" -infiles "ca/$dir/reqs/ca.csr"
 )}
 
 initsubca() {(
@@ -390,7 +400,7 @@ shouldvalidate() {(
   done
 
   validate_openssl "$out_chain" "$out_trust"
-  validate_nss "$nssdb" "$passwd" "$leaf"
+  validate_nss "$name" "$nssdb" "$passwd" "$leaf"
   validate_golang "$name" "$leaf" "$out_chain" "$out_trust"
 )}
 
@@ -415,13 +425,20 @@ for cert in reversed(certs):
 )}
 
 validate_nss() {(
-  local nssdb="$1"
-  local passwd="$2"
-  local leaf="$3"
+  local name="$1"
+  local nssdb="$2"
+  local passwd="$3"
+  local leaf="$4"
+
+  local usage=1
+  if [[ "$name" != *example.com ]]; then
+    # Assume we're validating a root or intermediate or something.
+    usage=3
+  fi
 
   set -e
 
-  /usr/lib64/nss/unsupported-tools/vfychain -d "$nssdb" -p -u 1 -a "$leaf"
+  /usr/lib64/nss/unsupported-tools/vfychain -d "$nssdb" -p -u "$usage" -a "$leaf"
 
   # certutil -V lacks support for advanced chain building; specifying -p above
   # causes vfychain to use libpkix instead of the original NSS chain building.

@@ -31,7 +31,7 @@ source libs.sh
 
   signcsr inter-b server email.example.com leaves/email.example.com.crt
 
-  initca old root-old-reissued
+  initca old root-old root-old-reissued 010101
 
   crosssign root-new inter-a
   crosssign root-old root-new
@@ -39,12 +39,22 @@ source libs.sh
 
   # Validate chain constructions against multiple validation implementations.
   shouldvalidate www.example.com leaves/www.example.com.crt inter-a -- root-old
+  shouldvalidate www.example.com leaves/www.example.com.crt inter-a -- root-old-reissued
   shouldvalidate www.example.com leaves/www.example.com.crt inter-a -- root-old root-new
+  shouldvalidate www.example.com leaves/www.example.com.crt inter-a -- root-old-reissued root-new
   shouldvalidate www.example.com leaves/www.example.com.crt cross-root-new:inter-a -- root-new
   shouldvalidate www.example.com leaves/www.example.com.crt cross-root-new:inter-a -- root-new root-old
+  shouldvalidate www.example.com leaves/www.example.com.crt cross-root-new:inter-a -- root-new root-old-reissued
   shouldvalidate www.example.com leaves/www.example.com.crt inter-a cross-root-new:inter-a -- root-new
   shouldvalidate www.example.com leaves/www.example.com.crt cross-root-new:inter-a inter-a -- root-old # OpenSSL requires inter-a to be after cross-root-new:inter-a for verification to succeed
   shouldvalidate www.example.com leaves/www.example.com.crt inter-a cross-root-new:inter-a -- root-new root-old
+  shouldvalidate www.example.com leaves/www.example.com.crt inter-a cross-root-new:inter-a -- root-new root-old-reissued
   shouldvalidate www.example.com leaves/www.example.com.crt cross-root-new:inter-a cross-root-old:root-new -- root-old
   shouldvalidate www.example.com leaves/www.example.com.crt cross-root-new:inter-a cross-root-old:root-new -- root-old root-new
+
+  # Validate a reissued root can be validated by itself. However, note that
+  # this fails in OpenSSL presently (as the openssl verify appears to use
+  # other validation logic than TLS validation does).
+  # shouldvalidate root-old ca/root-old-reissued/certs/ca.pem -- root-old
+  # shouldvalidate root-old ca/root-old/certs/ca.pem -- root-old-reissued
 )
