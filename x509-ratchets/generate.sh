@@ -30,6 +30,7 @@ source libs.sh
   initsubca inter-b inter-b root-new
 
   signcsr inter-b server email.example.com leaves/email.example.com.crt
+  signcsr root-old server direct.example.com leaves/direct.example.com.crt
 
   initca old root-old root-old-reissued 010101
 
@@ -51,6 +52,7 @@ source libs.sh
   shouldvalidate www.example.com leaves/www.example.com.crt inter-a cross-root-new:inter-a -- root-new root-old-reissued
   shouldvalidate www.example.com leaves/www.example.com.crt cross-root-new:inter-a cross-root-old:root-new -- root-old
   shouldvalidate www.example.com leaves/www.example.com.crt cross-root-new:inter-a cross-root-old:root-new -- root-old root-new
+  shouldvalidate direct.example.com leaves/direct.example.com.crt -- root-old
 
   # Validate a reissued root can be validated by itself. However, note that
   # this fails in OpenSSL presently (as the openssl verify appears to use
