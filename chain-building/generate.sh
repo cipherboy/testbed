@@ -50,7 +50,7 @@ source libs.sh
   # Bootstrap a circular CA (why not?!)
   genkey key-circle-a
   genkey key-circle-b
-  initca key-circle-a cirtcle-a circle-a-bootstrap
+  initca key-circle-a circle-a circle-a-bootstrap
   initsubca key-circle-b circle-b circle-a-bootstrap
   initsubca key-circle-a circle-a circle-b
 )
