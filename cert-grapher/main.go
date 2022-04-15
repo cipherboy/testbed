@@ -29,7 +29,7 @@ func main() {
     certParentsMap, certChildrenMap, subjectCertsMap := buildGraph(certs)
     fmt.Println("Distinct subjects: ", len(subjectCertsMap))
 
-    pathLengths := computePathLenghts(certs, certChildrenMap)
+    pathLengths := computePathLengths(certs, certChildrenMap)
     var maxLengthPath = 0
     var maxLengthCert = 0
     for cert, length := range pathLengths {
@@ -47,7 +47,7 @@ func main() {
     outputGraphFromNode(outputFile, certParentsMap, certChildrenMap, certs, maxLengthCert)
 
     for node, length := range pathLengths {
-        if length <= 5 {
+        if length <= 6 {
             continue
         }
 
@@ -129,7 +129,7 @@ func buildGraph(certs []*x509.Certificate) (map[int][]int, map[int][]int, map[st
     return certParentsMap, certChildrenMap, subjectCertsMap
 }
 
-func computePathLenghts(certs []*x509.Certificate, certChildrenMap map[int][]int) (map[int]int) {
+func computePathLengths(certs []*x509.Certificate, certChildrenMap map[int][]int) (map[int]int) {
     maxPathLengths := make(map[int]int, len(certs))
 
     for starting := range certs {
@@ -186,7 +186,7 @@ func outputGraph(outputFile string, certChildrenMap map[int][]int, certs []*x509
         return
     }
 
-    file.WriteString("digraph forest {\n")
+    file.WriteString("strict digraph forest {\n")
     for index /*, cert*/ := range certs {
         //subject := cert.Subject.String()
         file.WriteString(fmt.Sprintf(" c%v;\n", index))
@@ -203,7 +203,6 @@ func outputGraph(outputFile string, certChildrenMap map[int][]int, certs []*x509
 
 func outputGraphFromNode(outputFile string, certParentsMap map[int][]int, certChildrenMap map[int][]int, certs []*x509.Certificate, node int) {
     pathLengths := computePathLengthsFromNode(certs, certParentsMap, node)
-    fmt.Println("Total reachable from", node, ":", len(pathLengths))
 
     file, err := os.OpenFile(outputFile, os.O_CREATE | os.O_WRONLY | os.O_TRUNC, 0644)
     if err != nil {
@@ -211,12 +210,21 @@ func outputGraphFromNode(outputFile string, certParentsMap map[int][]int, certCh
         return
     }
 
-    file.WriteString("digraph forest {\n")
+    file.WriteString("strict digraph forest {\n")
 
     for index := range pathLengths {
         cert := certs[index]
         subject := cert.Subject.String()
         file.WriteString(fmt.Sprintf(" c%v [label=\"%v\"];\n", index, subject))
+    }
+
+    for child := range pathLengths {
+        for _, parent := range certParentsMap[child] {
+            if _, ok := pathLengths[parent]; !ok {
+                continue
+            }
+            file.WriteString(fmt.Sprintf(" c%v -> c%v;\n", parent, child))
+        }
     }
 
     for parent := range pathLengths {
