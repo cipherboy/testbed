@@ -26,7 +26,7 @@ ca() {(
   fi
 
   set -e
-  openssl ca -verbose -batch -config "ca/$ca/config" "$@"
+  openssl ca -verbose -utf8 -batch -config "ca/$ca/config" "$@"
 )}
 
 req() {(
@@ -40,7 +40,7 @@ req() {(
   fi
 
   set -e
-  openssl req -verbose -config "ca/$ca/config" "$@"
+  openssl req -verbose -utf8 -nameopt multiline,utf8 -config "ca/$ca/config" "$@"
 )}
 
 initca() {(
@@ -94,7 +94,7 @@ certificate       = \$dir/certs/ca.pem
 # SHA-1 is deprecated, so use SHA-2 instead.
 default_md        = sha256
 
-name_opt          = ca_default
+name_opt          = multiline,utf8
 cert_opt          = ca_default
 default_days      = 375
 preserve          = no
@@ -190,7 +190,7 @@ certificate       = \$dir/certs/ca.pem
 # SHA-1 is deprecated, so use SHA-2 instead.
 default_md        = sha256
 
-name_opt          = ca_default
+name_opt          = multiline,utf8
 cert_opt          = ca_default
 default_days      = 375
 preserve          = no
