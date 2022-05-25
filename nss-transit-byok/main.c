@@ -43,6 +43,28 @@ int doImport(int argc, int offset, const char **argv) {
         return 1;
     }
 
+    // NASTY HACK: I can't find any way to _import_ a public key into
+    // NSS.
+    //
+    // So we abuse the format of the SubjectPublicKeyInfo of a certificate
+    // and assume that our parsed PEM->DER roughly aligns to it.
+    SECItem item = { siBuffer, der, (unsigned int)der_len };
+    CERTSubjectPublicKeyInfo *spki = SECKEY_DecodeDERSubjectPublicKeyInfo(&item);
+    if (spki == NULL) {
+        PRErrorCode code = PORT_GetError();
+        const char *message = PORT_ErrorToString(code);
+        fprintf(stderr, "CERTSubjectPublicKeyInfo(\n%s\n) failed with code (%d): %s\n", HexFormatByteBuffer(der, der_len, 20), code, message);
+        return 1;
+    }
+
+    SECKEYPublicKey *pkey = SECKEY_ExtractPublicKey(spki);
+    if (pkey == NULL) {
+        PRErrorCode code = PORT_GetError();
+        const char *message = PORT_ErrorToString(code);
+        fprintf(stderr, "SECKEY_ExtractPublicKey(spki) failed with code (%d): %s\n", code, message);
+        return 1;
+    }
+
     PK11SlotInfo *slot = PK11_GetInternalKeySlot();
     if (slot == NULL) {
         PRErrorCode code = PORT_GetError();
@@ -50,6 +72,24 @@ int doImport(int argc, int offset, const char **argv) {
         fprintf(stderr, "PK11_GetInternalKeySlot() failed with code (%d): %s\n", code, message);
         return 1;
     }
+
+    CK_OBJECT_HANDLE handle = PK11_ImportPublicKey(slot, pkey, PR_TRUE);
+    if (handle == CK_INVALID_HANDLE) {
+        PRErrorCode code = PORT_GetError();
+        const char *message = PORT_ErrorToString(code);
+        fprintf(stderr, "PK11_ImportPublicKey(slot, pkey, true) failed with code (%d): %s\n", code, message);
+        return 1;
+    }
+
+    if (PK11_SetPublicKeyNickname(pkey, name) != SECSuccess) {
+        PRErrorCode code = PORT_GetError();
+        const char *message = PORT_ErrorToString(code);
+        fprintf(stderr, "PK11_SetPublicKeyNickname(pkey, \"%s\") failed with code (%d): %s\n", name, code, message);
+        return 1;
+    }
+
+    fprintf(stdout, "Handle: %lu\n", handle);
+    fprintf(stdout, "Nickname: %s\n", PK11_GetPublicKeyNickname(pkey));
 
     return 0;
 }
@@ -86,6 +126,8 @@ int main(int argc, const char **argv) {
         fprintf(stderr, " import NAME /path/to/key\n");
         return 2;
     }
+
+    fprintf(stdout, "Loading NSS DB Directory: %s\n", dir);
 
     int rv = NSS_Initialize(dir, "", "", SECMOD_DB, NSS_INIT_PK11THREADSAFE);
     if (rv != SECSuccess) {
