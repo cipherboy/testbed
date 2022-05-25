@@ -134,9 +134,6 @@ int doImport(int argc, int *offset, const char **argv) {
 
     fprintf(stdout, "Imported Nickname: %s\n", PK11_GetPublicKeyNickname(pkey));
 
-    PK11_FreeSlot(slot);
-    SECKEY_DestroyPublicKey(pkey);
-
     return 0;
 }
 
@@ -217,7 +214,10 @@ int doGenerate(int argc, int *offset, const char **argv) {
             return 1;
         }
 
+
+        SECItem *publicItem = PK11_DEREncodePublicKey(public);
         fprintf(stdout, "Generated Nickname: %s\n", PK11_GetPublicKeyNickname(public));
+        fprintf(stdout, "Generated Key:\n%s\n", HexFormatByteBuffer(publicItem->data, publicItem->len, 0));
     }
 
     return 0;
@@ -291,6 +291,8 @@ int doExport(int argc, int *offset, const char **argv) {
         return 1;
     }
 
+    SECKEY_DestroyPublicKeyList(pub_list);
+
     SECKEYPrivateKey *candidate = NULL;
     SECKEYPrivateKeyList *priv_list = PK11_ListPrivKeysInSlot(slot, (char *)toSign, NULL);
     SECKEYPrivateKeyListNode *priv_head = PRIVKEY_LIST_HEAD(priv_list);
@@ -299,6 +301,32 @@ int doExport(int argc, int *offset, const char **argv) {
             candidate = priv_head->key;
         } else {
             fprintf(stderr, "Too many inner private keys with same name: %s (%p!=%p)\n", toSign, candidate, priv_head->key);
+
+            char *empty = "\0";
+            char *candidateName = empty;
+            if (candidate->pkcs11Slot != NULL) {
+                candidateName = PK11_GetPrivateKeyNickname(candidate);
+            }
+            SECKEYPublicKey *candidateKey = SECKEY_ConvertToPublicKey(candidate);
+            char *candidatePublicName = empty;
+            if (candidateKey->pkcs11Slot != NULL) {
+                // SLOT may be NULL due to SECKEY_ConvertToPublicKey.
+                candidatePublicName = PK11_GetPublicKeyNickname(candidateKey);
+            }
+            SECItem *candidateItem = PK11_DEREncodePublicKey(candidateKey);
+
+            char *nextName = empty;
+            if (priv_head->key->pkcs11Slot != NULL) {
+                nextName = PK11_GetPrivateKeyNickname(priv_head->key);
+            }
+            SECKEYPublicKey *nextKey = SECKEY_ConvertToPublicKey(priv_head->key);
+            char *nextPublicName = empty;
+            if (nextKey->pkcs11Slot != NULL) {
+                nextPublicName = PK11_GetPublicKeyNickname(nextKey);
+            }
+            SECItem *nextItem = PK11_DEREncodePublicKey(nextKey);
+
+            fprintf(stderr, "First (%s->%s):\n%s\nSecond (%s->%s):\n%s\n", candidateName, candidatePublicName, HexFormatByteBuffer(candidateItem->data, candidateItem->len, 0), nextName, nextPublicName, HexFormatByteBuffer(nextItem->data, nextItem->len, 0));
             return 1;
         }
         priv_head = PRIVKEY_LIST_NEXT(priv_head);
@@ -308,6 +336,8 @@ int doExport(int argc, int *offset, const char **argv) {
         fprintf(stderr, "Unable to find inner private key with name: %s\n", toSign);
         return 1;
     }
+
+    SECKEY_DestroyPrivateKeyList(priv_list);
 
     return 0;
 }
