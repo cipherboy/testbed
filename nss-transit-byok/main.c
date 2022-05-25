@@ -7,30 +7,69 @@
 #include <pkcs11.h>
 #include <nss.h>
 
+#include <stdbool.h>
+
 #include "algids.h"
 
-int parseImportArgs(int argc, int offset, const char **argv, const char **name, const char **file) {
-    for (; offset < argc; offset++) {
-        if (strcmp("-h", argv[offset]) == 0) {
-            return -1;
+#define NUM_MECH_IDS 15
+#define NUM_KEY_BITS 15
+
+static NTBValuePair_s NTBToMechId_vp[NUM_MECH_IDS] = {
+    { "rsa-1024", CKM_RSA_PKCS },
+    { "rsa-2048", CKM_RSA_PKCS },
+    { "rsa-3072", CKM_RSA_PKCS },
+    { "rsa-4096", CKM_RSA_PKCS },
+    { "rsa-8192", CKM_RSA_PKCS },
+    { "ed25519", CKM_EDDSA },
+    { "ecdsa-p192", CKM_EDDSA },
+    { "ecdsa-p224", CKM_EDDSA },
+    { "ecdsa-p256", CKM_EDDSA },
+    { "ecdsa-p384", CKM_EDDSA },
+    { "ecdsa-p512", CKM_EDDSA },
+    { "aes128-gcm96", CKM_AES_GCM },
+    { "aes192-gcm96", CKM_AES_GCM },
+    { "aes256-gcm96", CKM_AES_GCM },
+    { "chacha20-poly1305", CKM_CHACHA20 },
+};
+
+static NTBValuePair_s NTBToKeyBits_vp[NUM_KEY_BITS] = {
+    { "rsa-1024", 1024 },
+    { "rsa-2048", 2048 },
+    { "rsa-3072", 3072 },
+    { "rsa-4096", 4096 },
+    { "rsa-8192", 8192 },
+    { "ecdsa-p192", 192 },
+    { "ecdsa-p224", 224 },
+    { "ecdsa-p256", 256 },
+    { "ecdsa-p384", 384 },
+    { "ecdsa-p512", 512 },
+    { "aes128-gcm96", 128 },
+    { "aes192-gcm96", 192 },
+    { "aes256-gcm96", 256 },
+    { "chacha20-poly1305", 256 },
+};
+
+void parseImportArgs(int argc, int *offset, const char **argv, const char **name, const char **file) {
+    for (; *offset < argc; *offset = (*offset) + 1) {
+        if (strcmp("-h", argv[*offset]) == 0) {
+            *offset = -1;
+            return;
         } else if (*name == NULL) {
-            *name = argv[offset];
+            *name = argv[*offset];
         } else if (*file == NULL) {
-            *file = argv[offset];
+            *file = argv[*offset];
         } else {
             break;
         }
     }
-
-    return offset;
 }
 
-int doImport(int argc, int offset, const char **argv) {
+int doImport(int argc, int *offset, const char **argv) {
     const char *name = NULL;
     const char *file = NULL;
 
-    offset = parseImportArgs(argc, offset, argv, &name, &file);
-    if (offset == -1 || name == NULL || file == NULL) {
+    parseImportArgs(argc, offset, argv, &name, &file);
+    if (*offset == -1 || name == NULL || file == NULL) {
         fprintf(stderr, "Usage: %s import NAME /path/to/key\n", argv[0]);
         return 2;
     }
@@ -73,6 +112,11 @@ int doImport(int argc, int offset, const char **argv) {
         return 1;
     }
 
+    if (PK11_NeedLogin(slot)) {
+        fprintf(stderr, "PK11_NeedLogin(slot) -> true\n");
+        return 99;
+    }
+
     CK_OBJECT_HANDLE handle = PK11_ImportPublicKey(slot, pkey, PR_TRUE);
     if (handle == CK_INVALID_HANDLE) {
         PRErrorCode code = PORT_GetError();
@@ -91,55 +135,138 @@ int doImport(int argc, int offset, const char **argv) {
     fprintf(stdout, "Handle: %lu\n", handle);
     fprintf(stdout, "Nickname: %s\n", PK11_GetPublicKeyNickname(pkey));
 
+    PK11_FreeSlot(slot);
+
     return 0;
 }
 
-int parseMainArgs(int argc, int offset, const char **argv, const char **database, const char **operation) {
-    for (; offset < argc; offset++) {
-        if (strcmp("-h", argv[offset]) == 0) {
-            return -1;
-        } else if (strcmp("-d", argv[offset]) == 0) {
-            offset += 1;
-            if (offset >= argc) {
-                fprintf(stderr, "Option -d requires an argument; none was given\n");
-                return -1;
-            }
-            *database = argv[offset];
-        } else if (*operation == NULL) {
-            *operation = argv[offset];
+void parseGenerateArgs(int argc, int *offset, const char **argv, const char **name, const char **type) {
+    for (; *offset < argc; *offset = (*offset) + 1) {
+        if (strcmp("-h", argv[*offset]) == 0) {
+            *offset = -1;
+            return;
+        } else if (*name == NULL) {
+            *name = argv[*offset];
+        } else if (*type == NULL) {
+            *type = argv[*offset];
         } else {
             break;
         }
     }
+}
 
-    return offset;
+int doGenerate(int argc, int *offset, const char **argv) {
+    const char *name = NULL;
+    const char *type = NULL;
+
+    parseImportArgs(argc, offset, argv, &name, &type);
+    if (*offset == -1 || name == NULL || type == NULL) {
+        fprintf(stderr, "Usage: %s generate NAME TYPE\n", argv[0]);
+        fprintf(stderr, "Known types:\n");
+        for (size_t index = 0; index < NUM_MECH_IDS; index++) {
+            fprintf(stderr, " - %s\n", NTBToMechId_vp[index].key);
+        }
+        return 2;
+    }
+
+    CK_MECHANISM_TYPE mech = NTBFindPair(NTBToMechId_vp, NUM_MECH_IDS, type);
+    if (mech == 0) {
+        fprintf(stderr, "Unknown mechanism for type: %s\n", type);
+        return 1;
+    }
+
+    CK_ULONG bits = NTBFindPair(NTBToKeyBits_vp, NUM_KEY_BITS, type);
+
+    PK11SlotInfo *slot = PK11_GetInternalKeySlot();
+    if (slot == NULL) {
+        PRErrorCode code = PORT_GetError();
+        const char *message = PORT_ErrorToString(code);
+        fprintf(stderr, "PK11_GetInternalKeySlot() failed with code (%d): %s\n", code, message);
+        return 1;
+    }
+
+    SECKEYPrivateKey *private = NULL;
+    SECKEYPublicKey *public = NULL;
+
+    if (mech == CKM_RSA_PKCS) {
+        PK11RSAGenParams rsaparams;
+        rsaparams.keySizeInBits = bits;
+        rsaparams.pe = 65537;
+
+        private = PK11_GenerateKeyPair(slot, CKM_RSA_PKCS_KEY_PAIR_GEN, &rsaparams, &public, PR_TRUE, PR_FALSE, NULL);
+        if (private == NULL) {
+            PRErrorCode code = PORT_GetError();
+            const char *message = PORT_ErrorToString(code);
+            fprintf(stderr, "PK11_GenerateKeyPair() failed with code (%d): %s\n", code, message);
+            return 1;
+        }
+    }
+
+    return 0;
+}
+
+void parseMainArgs(int argc, int *offset, const char **argv, const char **database, const char **operation) {
+    for (; *offset < argc; *offset = (*offset) + 1) {
+        if (strcmp("-h", argv[*offset]) == 0) {
+            *offset = -1;
+            return;
+        } else if (strcmp("-d", argv[*offset]) == 0) {
+            *offset += 1;
+            if (*offset >= argc) {
+                fprintf(stderr, "Option -d requires an argument; none was given\n");
+                *offset = -1;
+                return;
+            }
+            *database = argv[*offset];
+        } else if (*operation == NULL) {
+            *operation = argv[*offset];
+        } else {
+            break;
+        }
+    }
 }
 
 int main(int argc, const char **argv) {
     const char *dir = "/etc/pki/nssdb";
     const char *operation = NULL;
 
-    int offset = parseMainArgs(argc, 1, argv, &dir, &operation);
-    if (offset == -1 || operation == NULL) {
-        fprintf(stderr, "Usage: %s [-d /path/to/nssdb] COMMAND\n", argv[0]);
-        fprintf(stderr, "Commands:\n");
-        fprintf(stderr, " import NAME /path/to/key\n");
-        return 2;
+    int offset = 1;
+    bool initialized = false;
+
+    while (true) {
+        parseMainArgs(argc, &offset, argv, &dir, &operation);
+        if (offset == -1 || operation == NULL) {
+            fprintf(stderr, "Usage: %s [-d /path/to/nssdb] COMMAND\n", argv[0]);
+            fprintf(stderr, "Commands:\n");
+            fprintf(stderr, " import NAME /path/to/key\n");
+            fprintf(stderr, " generate NAME TYPE\n");
+            return 2;
+        }
+
+        if (!initialized) {
+            fprintf(stdout, "Loading NSS DB Directory: %s\n", dir);
+
+            int rv = NSS_Initialize(dir, "", "", SECMOD_DB, NSS_INIT_PK11THREADSAFE);
+            if (rv != SECSuccess) {
+                PRErrorCode code = PORT_GetError();
+                const char *message = PORT_ErrorToString(code);
+                fprintf(stderr, "NSS_initialize(\"%s\") failed with code (%d): %s\n", dir, code, message);
+                return 1;
+            }
+
+            initialized = true;
+        }
+
+        if (strcmp(operation, "import") == 0) {
+            return doImport(argc, &offset, argv);
+        } else if (strcmp(operation, "generate") == 0) {
+            return doGenerate(argc, &offset, argv);
+        }
+
+        operation = NULL;
     }
 
-    fprintf(stdout, "Loading NSS DB Directory: %s\n", dir);
-
-    int rv = NSS_Initialize(dir, "", "", SECMOD_DB, NSS_INIT_PK11THREADSAFE);
-    if (rv != SECSuccess) {
-        PRErrorCode code = PORT_GetError();
-        const char *message = PORT_ErrorToString(code);
-        fprintf(stderr, "NSS_initialize(\"%s\") failed with code (%d): %s\n", dir, code, message);
-        return 1;
-    }
-
-    if (strcmp(operation, "import") == 0) {
-        return doImport(argc, offset, argv);
-    }
+    NSS_Shutdown();
 
     return 0;
 }

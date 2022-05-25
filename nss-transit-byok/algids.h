@@ -16,10 +16,7 @@ typedef struct NTBValuePair_s {
     CK_ULONG value;
 } NTBValuePair_s;
 
-CK_ULONG NTBFindPair(NTBValuePair_s *elements, size_t num_elems, char *key);
-
-#define NUM_MECH_IDS 15
-#define NUM_KEY_BITS 15
+CK_ULONG NTBFindPair(NTBValuePair_s *elements, size_t num_elems, const char *key);
 
 char *HexFormatByteBuffer(uint8_t *buffer, size_t length, size_t width);
 
