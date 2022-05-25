@@ -9,6 +9,51 @@
 
 #include "algids.h"
 
+int parseImportArgs(int argc, int offset, const char **argv, const char **name, const char **file) {
+    for (; offset < argc; offset++) {
+        if (strcmp("-h", argv[offset]) == 0) {
+            return -1;
+        } else if (*name == NULL) {
+            *name = argv[offset];
+        } else if (*file == NULL) {
+            *file = argv[offset];
+        } else {
+            break;
+        }
+    }
+
+    return offset;
+}
+
+int doImport(int argc, int offset, const char **argv) {
+    const char *name = NULL;
+    const char *file = NULL;
+
+    offset = parseImportArgs(argc, offset, argv, &name, &file);
+    if (offset == -1 || name == NULL || file == NULL) {
+        fprintf(stderr, "Usage: %s import NAME /path/to/key\n", argv[0]);
+        return 2;
+    }
+
+    uint8_t *der = NULL;
+    size_t der_len = 0;
+    der = ParsePEMKeyToDER(&der_len, file);
+    if (der == NULL) {
+        fprintf(stderr, "Failed to parse key to DER.\n");
+        return 1;
+    }
+
+    PK11SlotInfo *slot = PK11_GetInternalKeySlot();
+    if (slot == NULL) {
+        PRErrorCode code = PORT_GetError();
+        const char *message = PORT_ErrorToString(code);
+        fprintf(stderr, "PK11_GetInternalKeySlot() failed with code (%d): %s\n", code, message);
+        return 1;
+    }
+
+    return 0;
+}
+
 int parseMainArgs(int argc, int offset, const char **argv, const char **database, const char **operation) {
     for (; offset < argc; offset++) {
         if (strcmp("-h", argv[offset]) == 0) {
@@ -22,6 +67,7 @@ int parseMainArgs(int argc, int offset, const char **argv, const char **database
             *database = argv[offset];
         } else if (*operation == NULL) {
             *operation = argv[offset];
+        } else {
             break;
         }
     }
@@ -37,7 +83,7 @@ int main(int argc, const char **argv) {
     if (offset == -1 || operation == NULL) {
         fprintf(stderr, "Usage: %s [-d /path/to/nssdb] COMMAND\n", argv[0]);
         fprintf(stderr, "Commands:\n");
-        fprintf(stderr, " import /path/to/key\n");
+        fprintf(stderr, " import NAME /path/to/key\n");
         return 2;
     }
 
@@ -49,9 +95,9 @@ int main(int argc, const char **argv) {
         return 1;
     }
 
-    /*if (strcmp(operation, "import") == 0) {
-        doImport();
-    }*/
+    if (strcmp(operation, "import") == 0) {
+        return doImport(argc, offset, argv);
+    }
 
     return 0;
 }
