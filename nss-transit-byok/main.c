@@ -132,10 +132,10 @@ int doImport(int argc, int *offset, const char **argv) {
         return 1;
     }
 
-    fprintf(stdout, "Handle: %lu\n", handle);
-    fprintf(stdout, "Nickname: %s\n", PK11_GetPublicKeyNickname(pkey));
+    fprintf(stdout, "Imported Nickname: %s\n", PK11_GetPublicKeyNickname(pkey));
 
     PK11_FreeSlot(slot);
+    SECKEY_DestroyPublicKey(pkey);
 
     return 0;
 }
@@ -202,6 +202,24 @@ int doGenerate(int argc, int *offset, const char **argv) {
         }
     }
 
+    if (private != NULL && public != NULL) {
+        if (PK11_SetPrivateKeyNickname(private, name) != SECSuccess) {
+            PRErrorCode code = PORT_GetError();
+            const char *message = PORT_ErrorToString(code);
+            fprintf(stderr, "PK11_SetPublicKeyNickname(pkey, \"%s\") failed with code (%d): %s\n", name, code, message);
+            return 1;
+        }
+
+        if (PK11_SetPublicKeyNickname(public, name) != SECSuccess) {
+            PRErrorCode code = PORT_GetError();
+            const char *message = PORT_ErrorToString(code);
+            fprintf(stderr, "PK11_SetPublicKeyNickname(pkey, \"%s\") failed with code (%d): %s\n", name, code, message);
+            return 1;
+        }
+
+        fprintf(stdout, "Generated Nickname: %s\n", PK11_GetPublicKeyNickname(public));
+    }
+
     return 0;
 }
 
@@ -236,6 +254,10 @@ int main(int argc, const char **argv) {
     while (true) {
         parseMainArgs(argc, &offset, argv, &dir, &operation);
         if (offset == -1 || operation == NULL) {
+            if (initialized) {
+                break;
+            }
+
             fprintf(stderr, "Usage: %s [-d /path/to/nssdb] COMMAND\n", argv[0]);
             fprintf(stderr, "Commands:\n");
             fprintf(stderr, " import NAME /path/to/key\n");
@@ -257,10 +279,14 @@ int main(int argc, const char **argv) {
             initialized = true;
         }
 
+        int ret = 0;
         if (strcmp(operation, "import") == 0) {
-            return doImport(argc, &offset, argv);
+            ret = doImport(argc, &offset, argv);
         } else if (strcmp(operation, "generate") == 0) {
-            return doGenerate(argc, &offset, argv);
+            ret = doGenerate(argc, &offset, argv);
+        }
+        if (ret != 0) {
+            return ret;
         }
 
         operation = NULL;
