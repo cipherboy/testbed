@@ -223,6 +223,95 @@ int doGenerate(int argc, int *offset, const char **argv) {
     return 0;
 }
 
+void parseExportArgs(int argc, int *offset, const char **argv, int *aes_bits, const char **signWith, const char **toSign) {
+    for (; *offset < argc; *offset = (*offset) + 1) {
+        if (strcmp("-h", argv[*offset]) == 0) {
+            *offset = -1;
+            return;
+        } else if (strcmp("-b", argv[*offset]) == 0) {
+            *offset += 1;
+            if (*offset >= argc) {
+                fprintf(stderr, "Option -b requires an argument (number of bits); none was given\n");
+                *offset = -1;
+                return;
+            }
+
+            *aes_bits = atoi(argv[*offset]);
+            if (*aes_bits != 128 && *aes_bits != 192 && *aes_bits != 256) {
+                fprintf(stderr, "Option -b only accepts 128/192/256 bits; got %s -> %d\n", argv[*offset], *aes_bits);
+                *offset = -1;
+                return;
+            }
+        } else if (*signWith == NULL) {
+            *signWith = argv[*offset];
+        } else if (*toSign == NULL) {
+            *toSign = argv[*offset];
+        } else {
+            break;
+        }
+    }
+}
+
+int doExport(int argc, int *offset, const char **argv) {
+    int aes_bits = 128;
+    const char *signWith = NULL;
+    const char *toSign = NULL;
+
+    parseExportArgs(argc, offset, argv, &aes_bits, &signWith, &toSign);
+    if (*offset == -1 || signWith == NULL || toSign == NULL) {
+        fprintf(stderr, "Usage: %s export [-b AES_BITS] SIGNWITH TOSIGN\n", argv[0]);
+        return 2;
+    }
+
+    // Grab the slot.
+    PK11SlotInfo *slot = PK11_GetInternalKeySlot();
+    if (slot == NULL) {
+        PRErrorCode code = PORT_GetError();
+        const char *message = PORT_ErrorToString(code);
+        fprintf(stderr, "PK11_GetInternalKeySlot() failed with code (%d): %s\n", code, message);
+        return 1;
+    }
+
+    // Find the keys.
+    SECKEYPublicKey *outer = NULL;
+    SECKEYPublicKeyList *pub_list = PK11_ListPublicKeysInSlot(slot, (char *)signWith);
+    SECKEYPublicKeyListNode *pub_head = PUBKEY_LIST_HEAD(pub_list);
+    while (!PUBKEY_LIST_END(pub_head, pub_list)) {
+        if (outer == NULL) {
+            outer = pub_head->key;
+        } else {
+            fprintf(stderr, "Too many outer wrapping keys with same name: %s\n", signWith);
+            return 1;
+        }
+        pub_head = PUBKEY_LIST_NEXT(pub_head);
+    }
+
+    if (outer == NULL) {
+        fprintf(stderr, "Unable to find outer wrapping key with name: %s\n", signWith);
+        return 1;
+    }
+
+    SECKEYPrivateKey *candidate = NULL;
+    SECKEYPrivateKeyList *priv_list = PK11_ListPrivKeysInSlot(slot, (char *)toSign, NULL);
+    SECKEYPrivateKeyListNode *priv_head = PRIVKEY_LIST_HEAD(priv_list);
+    while (!PRIVKEY_LIST_END(priv_head, priv_list)) {
+        if (candidate == NULL) {
+            candidate = priv_head->key;
+        } else {
+            fprintf(stderr, "Too many inner private keys with same name: %s (%p!=%p)\n", toSign, candidate, priv_head->key);
+            return 1;
+        }
+        priv_head = PRIVKEY_LIST_NEXT(priv_head);
+    }
+
+    if (candidate == NULL) {
+        fprintf(stderr, "Unable to find inner private key with name: %s\n", toSign);
+        return 1;
+    }
+
+    return 0;
+}
+
 void parseMainArgs(int argc, int *offset, const char **argv, const char **database, const char **operation) {
     for (; *offset < argc; *offset = (*offset) + 1) {
         if (strcmp("-h", argv[*offset]) == 0) {
@@ -231,15 +320,19 @@ void parseMainArgs(int argc, int *offset, const char **argv, const char **databa
         } else if (strcmp("-d", argv[*offset]) == 0) {
             *offset += 1;
             if (*offset >= argc) {
-                fprintf(stderr, "Option -d requires an argument; none was given\n");
+                fprintf(stderr, "Option -d requires an argument (nss db directory path); none was given\n");
                 *offset = -1;
                 return;
             }
             *database = argv[*offset];
         } else if (*operation == NULL) {
             *operation = argv[*offset];
+            *offset += 1;
+            return;
         } else {
-            break;
+            fprintf(stderr, "Unknown option (%s)", argv[*offset]);
+            *offset = -1;
+            return;
         }
     }
 }
@@ -262,6 +355,7 @@ int main(int argc, const char **argv) {
             fprintf(stderr, "Commands:\n");
             fprintf(stderr, " import NAME /path/to/key\n");
             fprintf(stderr, " generate NAME TYPE\n");
+            fprintf(stderr, " export SIGNWITH TOSIGN\n");
             return 2;
         }
 
@@ -284,7 +378,10 @@ int main(int argc, const char **argv) {
             ret = doImport(argc, &offset, argv);
         } else if (strcmp(operation, "generate") == 0) {
             ret = doGenerate(argc, &offset, argv);
+        } else if (strcmp(operation, "export") == 0) {
+            ret = doExport(argc, &offset, argv);
         }
+
         if (ret != 0) {
             return ret;
         }
