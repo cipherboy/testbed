@@ -201,6 +201,7 @@ int doGenerate(int argc, int *offset, const char **argv) {
 
     SECKEYPrivateKey *private = NULL;
     SECKEYPublicKey *public = NULL;
+    PK11SymKey *symmetric = NULL;
 
     if (mech == CKM_RSA_PKCS) {
         PK11RSAGenParams rsaparams;
@@ -208,10 +209,68 @@ int doGenerate(int argc, int *offset, const char **argv) {
         rsaparams.pe = 65537;
 
         private = PK11_GenerateKeyPair(slot, CKM_RSA_PKCS_KEY_PAIR_GEN, &rsaparams, &public, PR_TRUE, PR_FALSE, NULL);
-        if (private == NULL) {
+        if (private == NULL || public == NULL) {
             PRErrorCode code = PORT_GetError();
             const char *message = PORT_ErrorToString(code);
             fprintf(stderr, "PK11_GenerateKeyPair() failed with code (%d): %s\n", code, message);
+            return 1;
+        }
+    } else if (mech == CKM_EDDSA) {
+        SECOidTag curve_oid = SEC_OID_UNKNOWN;
+
+        if (strcmp(type, "ed25519") == 0) {
+            curve_oid = SEC_OID_CURVE25519;
+        } else {
+            switch (bits) {
+            case 192:
+                curve_oid = SEC_OID_ANSIX962_EC_PRIME192V1;
+                break;
+            case 224:
+                curve_oid = SEC_OID_SECG_EC_SECP224R1;
+                break;
+            case 256:
+                curve_oid = SEC_OID_ANSIX962_EC_PRIME256V1;
+                break;
+            case 384:
+                curve_oid = SEC_OID_SECG_EC_SECP384R1;
+                break;
+            case 521:
+                curve_oid = SEC_OID_SECG_EC_SECP521R1;
+                break;
+            }
+        }
+
+        SECOidData* curve = SECOID_FindOIDByTag(curve_oid);
+        if (curve == NULL) {
+            fprintf(stderr, "Unknown curve/oid for type/bits: %s/%lu\n", type, bits);
+            return 1;
+        }
+
+        size_t plen = curve->oid.len + 2;
+        uint8_t *extra = calloc(plen, sizeof(uint8_t));
+        extra[0] = SEC_ASN1_OBJECT_ID;
+        extra[1] = (uint8_t)curve->oid.len;
+        memcpy(extra + 2, curve->oid.data, curve->oid.len);
+
+        SECItem ec_params = {siBuffer, extra, plen};
+
+        private = PK11_GenerateKeyPair(slot, CKM_EC_KEY_PAIR_GEN, &ec_params, &public, PR_TRUE, PR_FALSE, NULL);
+        if (private == NULL || public == NULL) {
+            PRErrorCode code = PORT_GetError();
+            const char *message = PORT_ErrorToString(code);
+            fprintf(stderr, "PK11_GenerateKeyPair() failed with code (%d): %s\n", code, message);
+            return 1;
+        }
+    } else if (mech == CKM_AES_GCM || mech == CKM_CHACHA20) {
+        CK_MECHANISM_TYPE gen = CKM_AES_KEY_GEN;
+        if (mech == CKM_CHACHA20) {
+            gen = CKM_CHACHA20_KEY_GEN;
+        }
+        symmetric = PK11_KeyGen(slot, gen, NULL, bits/8, NULL);
+        if (symmetric == NULL) {
+            PRErrorCode code = PORT_GetError();
+            const char *message = PORT_ErrorToString(code);
+            fprintf(stderr, "PK11_KeyGen() failed with code (%d): %s\n", code, message);
             return 1;
         }
     }
@@ -234,6 +293,20 @@ int doGenerate(int argc, int *offset, const char **argv) {
         SECItem *publicItem = PK11_DEREncodePublicKey(public);
         fprintf(stdout, "Generated Nickname: %s\n", PK11_GetPublicKeyNickname(public));
         fprintf(stdout, "Generated Key:\n%s\n", HexFormatByteBuffer(publicItem->data, publicItem->len, 0));
+    } else if (symmetric != NULL) {
+        symmetric = PK11_MoveSymKey(slot, CKA_ENCRYPT, 0, PR_TRUE, symmetric);
+
+        if (PK11_SetSymKeyNickname(symmetric, name) != SECSuccess) {
+            PRErrorCode code = PORT_GetError();
+            const char *message = PORT_ErrorToString(code);
+            fprintf(stderr, "PK11_SetSymKeyNickname(symmetric, \"%s\") failed with code (%d): %s\n", name, code, message);
+            return 1;
+        }
+
+        fprintf(stdout, "Generated Nickname: %s\n", PK11_GetSymKeyNickname(symmetric));
+    } else {
+        fprintf(stderr, "No key generated (%s/%lu)!\n", type, bits);
+        return 1;
     }
 
     return 0;
@@ -258,17 +331,17 @@ void parseExportArgs(int argc, int *offset, const char **argv, int *aes_bits, in
                 *offset = -1;
                 return;
             }
-        } else if (strcmp("-h", argv[*offset]) == 0) {
+        } else if (strcmp("-a", argv[*offset]) == 0) {
             *offset += 1;
             if (*offset >= argc) {
-                fprintf(stderr, "Option -h requires an argument (number of bits in hash function); none was given\n");
+                fprintf(stderr, "Option -a requires an argument (number of bits in hash function); none was given\n");
                 *offset = -1;
                 return;
             }
 
             *hash_bits = atoi(argv[*offset]);
             if (*hash_bits != 160 && *hash_bits != 224 && *hash_bits != 256 && *hash_bits != 384 && *hash_bits != 512) {
-                fprintf(stderr, "Option -h only accepts 160/224/256/384/512 bits; got %s -> %d\n", argv[*offset], *aes_bits);
+                fprintf(stderr, "Option -a only accepts 160/224/256/384/512 bits; got %s -> %d\n", argv[*offset], *aes_bits);
                 *offset = -1;
                 return;
             }
@@ -281,7 +354,7 @@ void parseExportArgs(int argc, int *offset, const char **argv, int *aes_bits, in
             }
 
             *mgf_bits = atoi(argv[*offset]);
-            if (*hash_bits != 160 && *hash_bits != 224 && *hash_bits != 256 && *hash_bits != 384 && *hash_bits != 512) {
+            if (*mgf_bits != 160 && *mgf_bits != 224 && *mgf_bits != 256 && *mgf_bits != 384 && *mgf_bits != 512) {
                 fprintf(stderr, "Option -m only accepts 160/224/256/384/512 bits; got %s -> %d\n", argv[*offset], *aes_bits);
                 *offset = -1;
                 return;
@@ -299,6 +372,10 @@ void parseExportArgs(int argc, int *offset, const char **argv, int *aes_bits, in
 SECKEYPublicKey *findPublicKeyWithName(PK11SlotInfo *slot, char *signWith) {
     SECKEYPublicKey *outer = NULL;
     SECKEYPublicKeyList *pub_list = PK11_ListPublicKeysInSlot(slot, signWith);
+    if (pub_list == NULL) {
+        return NULL;
+    }
+
     SECKEYPublicKeyListNode *pub_head = PUBKEY_LIST_HEAD(pub_list);
     while (!PUBKEY_LIST_END(pub_head, pub_list)) {
         if (outer == NULL) {
@@ -316,6 +393,10 @@ SECKEYPublicKey *findPublicKeyWithName(PK11SlotInfo *slot, char *signWith) {
 SECKEYPrivateKey *findPrivateKeyWithName(PK11SlotInfo *slot, char *toSign) {
     SECKEYPrivateKey *candidate = NULL;
     SECKEYPrivateKeyList *priv_list = PK11_ListPrivKeysInSlot(slot, toSign, NULL);
+    if (priv_list == NULL) {
+        return NULL;
+    }
+
     SECKEYPrivateKeyListNode *priv_head = PRIVKEY_LIST_HEAD(priv_list);
     while (!PRIVKEY_LIST_END(priv_head, priv_list)) {
         if (candidate == NULL) {
@@ -402,13 +483,13 @@ int doExport(int argc, int *offset, const char **argv) {
 
     parseExportArgs(argc, offset, argv, &aes_bits, &hash_bits, &mgf_bits, &signWith, &toSign);
     if (*offset == -1 || signWith == NULL || toSign == NULL) {
-        fprintf(stderr, "Usage: %s export [-b AES_BITS] SIGNWITH TOSIGN\n", argv[0]);
+        fprintf(stderr, "Usage: %s export [-b AES_BITS] [-a HASH_BITS] [-m MGF1_BITS] SIGNWITH TOSIGN\n", argv[0]);
         return 2;
     }
 
-    fprintf(stdout, "AES key bits: %d\n", aes_bits);
-    fprintf(stdout, "hash bits: %d\n", hash_bits);
-    fprintf(stdout, "mgf1 bits: %d\n", mgf_bits);
+    fprintf(stdout, "Export AES key bits: %d\n", aes_bits);
+    fprintf(stdout, "Export hash bits: %d->%ld\n", hash_bits, hashBitsToMech(hash_bits));
+    fprintf(stdout, "Export MGF1 bits: %d->%ld\n", mgf_bits, mgfBitsToMech(mgf_bits));
 
     // Grab the slot.
     PK11SlotInfo *slot = PK11_GetInternalKeySlot();
@@ -475,7 +556,14 @@ int doExport(int argc, int *offset, const char **argv) {
         if (PK11_WrapPrivKey(slot, transient, asymCandidate, CKM_AES_KEY_WRAP_KWP, NULL, &wrappedCandidate, NULL) != SECSuccess) {
             PRErrorCode code = PORT_GetError();
             const char *message = PORT_ErrorToString(code);
-            fprintf(stderr, "Unable to wrap transient wrapping key (%d): %s\n", code, message);
+            fprintf(stderr, "Unable to wrap transient wrapping priv key (%d): %s\n", code, message);
+            return 1;
+        }
+    } else if (symCandidate != NULL) {
+        if (PK11_WrapSymKey(CKM_AES_KEY_WRAP_KWP, NULL, transient, symCandidate, &wrappedCandidate) != SECSuccess) {
+            PRErrorCode code = PORT_GetError();
+            const char *message = PORT_ErrorToString(code);
+            fprintf(stderr, "Unable to wrap transient wrapping sym key (%d): %s\n", code, message);
             return 1;
         }
     }
@@ -485,7 +573,7 @@ int doExport(int argc, int *offset, const char **argv) {
     memcpy(allData, wrappedTransient.data, wrappedTransient.len);
     memcpy(allData + wrappedTransient.len, wrappedCandidate.data, wrappedCandidate.len);
 
-    fprintf(stdout, "Wrapped data (%u + %u = %zu bytes):\n%s", wrappedTransient.len, wrappedCandidate.len, totalLen, BTOA_DataToAscii(allData, totalLen));
+    fprintf(stdout, "Wrapped data (%u + %u = %zu bytes):\n%s\n", wrappedTransient.len, wrappedCandidate.len, totalLen, BTOA_DataToAscii(allData, totalLen));
 
     return 0;
 }
