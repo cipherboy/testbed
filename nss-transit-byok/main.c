@@ -14,7 +14,7 @@
 #include "algids.h"
 
 #define NUM_MECH_IDS 15
-#define NUM_KEY_BITS 15
+#define NUM_KEY_BITS 14
 
 static NTBValuePair_s NTBToMechId_vp[NUM_MECH_IDS] = {
     { "rsa-1024", CKM_RSA_PKCS },
@@ -568,10 +568,24 @@ int doExport(int argc, int *offset, const char **argv) {
         }
     }
 
+    // Show the decrypted data.
+    SECItem unwrappedCandidate;
+    unwrappedCandidate.len = 40960;
+    unwrappedCandidate.data = PR_Calloc(unwrappedCandidate.len, sizeof(uint8_t));
+    if (PK11_Decrypt(transient, CKM_AES_KEY_WRAP_KWP, NULL, unwrappedCandidate.data, &unwrappedCandidate.len, unwrappedCandidate.len, wrappedCandidate.data, wrappedCandidate.len) != SECSuccess) {
+        PRErrorCode code = PORT_GetError();
+        const char *message = PORT_ErrorToString(code);
+        fprintf(stderr, "Unable to unwrap transient wrapping key (%d): %s\n", code, message);
+        return 1;
+    }
+
     size_t totalLen = wrappedTransient.len + wrappedCandidate.len;
     uint8_t *allData = calloc(wrappedTransient.len + wrappedCandidate.len, sizeof(uint8_t));
     memcpy(allData, wrappedTransient.data, wrappedTransient.len);
     memcpy(allData + wrappedTransient.len, wrappedCandidate.data, wrappedCandidate.len);
+
+    fprintf(stdout, "(DEBUG) Unwrapped transited key data (%u bytes):\n%s\n", unwrappedCandidate.len, BTOA_DataToAscii(unwrappedCandidate.data, unwrappedCandidate.len));
+
 
     fprintf(stdout, "Wrapped data (%u + %u = %zu bytes):\n%s\n", wrappedTransient.len, wrappedCandidate.len, totalLen, BTOA_DataToAscii(allData, totalLen));
 

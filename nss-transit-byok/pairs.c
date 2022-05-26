@@ -4,8 +4,12 @@
 #include "algids.h"
 
 CK_ULONG NTBFindPair(NTBValuePair_s *elements, size_t num_elems, const char *key) {
+    if (key == NULL) {
+        return 0;
+    }
+
     for (size_t index = 0; index < num_elems; index++) {
-        if (strcmp(elements[index].key, key) == 0) {
+        if (strcmp(key, elements[index].key) == 0) {
             return elements[index].value;
         }
     }
