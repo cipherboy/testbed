@@ -458,7 +458,7 @@ CK_RSA_PKCS_MGF_TYPE mgfBitsToMech(int bits) {
         case 160:
             return CKG_MGF1_SHA1;
         case 224:
-            return CKG_MGF1_SHA256;
+            return CKG_MGF1_SHA224;
         case 256:
             return CKG_MGF1_SHA256;
         case 384:
