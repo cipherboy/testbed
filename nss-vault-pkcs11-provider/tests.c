@@ -14,6 +14,7 @@
 
 #include "tests.h"
 
+#define MAX_ATTEMPTS 10
 #define MAX_HMAC_OUTPUT_LEN 512
 
 SECStatus randUint(uint32_t *value) {
@@ -71,55 +72,127 @@ SECStatus randChoice(void **choice, void **pile, uint32_t count) {
     return SECSuccess;
 }
 
-test_ret_t doAESOp(PK11SlotInfo *slot, PK11SymKey *key, CK_MECHANISM_TYPE mech, SECItem *param, const unsigned char *data, unsigned int dataLen) {
-    if (PK11_DoesMechanism(slot, mech) != PR_TRUE) {
-        fprintf(stderr, "Slot %s / Token %s does not support AES mechanism %lx: skipping.\n", PK11_GetSlotName(slot), PK11_GetTokenName(slot), mech);
+PRBool ensureAllDoMech(PK11SlotInfo **slots, size_t num_slots, CK_MECHANISM_TYPE mech) {
+    for (size_t index = 0; index < num_slots; index++) {
+        if (PK11_DoesMechanism(slots[index], mech) == PR_FALSE) {
+            return PR_FALSE;
+        }
+    }
+
+    return PR_TRUE;
+}
+
+SECStatus establishSymKeyOnSlots(PK11SlotInfo **slots, size_t num_slots, CK_MECHANISM_TYPE mech, unsigned int bits, CK_FLAGS opFlags, PK11SymKey **keys) {
+    if (ensureAllDoMech(slots, num_slots, mech) == PR_FALSE) {
+        fprintf(stderr, "One or more slots don't do the requested mechanism: %lx.\n", mech);
+        return SECFailure;
+    }
+
+    PK11SlotInfo *default_slot = slots[0];
+    PK11SymKey *key = PK11_TokenKeyGenWithFlags(default_slot, mech, NULL, bits, NULL, opFlags, 0, NULL);
+    if (key == NULL) {
+        PRErrorCode code = PORT_GetError();
+        const char *message = PORT_ErrorToString(code);
+        fprintf(stderr, "[Slot %s / Token %s] Failed to generate symmetric key with mechanism %lx: (%d) %s\n", PK11_GetSlotName(default_slot), PK11_GetTokenName(default_slot), mech, code, message);
+        return SECFailure;
+    }
+
+    keys[0] = key;
+
+    for (size_t index = 1; index < num_slots; index++) {
+        CK_ATTRIBUTE_TYPE mode = CKA_ENCRYPT;
+        if ((opFlags & CKF_SIGN) == CKF_SIGN) {
+            mode = CKA_SIGN;
+        }
+
+        PK11SlotInfo *dest_slot = slots[index];
+        PK11SymKey *dest_key = PK11_MoveSymKey(dest_slot, mode, opFlags, PR_TRUE, key);
+        if (dest_key == NULL) {
+            PRErrorCode code = PORT_GetError();
+            const char *message = PORT_ErrorToString(code);
+            fprintf(stderr, "[Slot %s / Token %s]->[Slot %s / Token %s] Failed to move symmetric key with mechanism %lx to destination slot: (%d) %s\n", PK11_GetSlotName(default_slot), PK11_GetTokenName(default_slot), PK11_GetSlotName(dest_slot), PK11_GetTokenName(dest_slot), mech, code, message);
+            return SECFailure;
+        }
+
+        keys[index] = dest_key;
+    }
+
+    return SECSuccess;
+}
+
+test_ret_t doAESOp(PK11SlotInfo **slots, PK11SymKey **keys, size_t num_slots, CK_MECHANISM_TYPE mech, SECItem *param, const unsigned char *data, unsigned int dataLen) {
+    if (PK11_DoesMechanism(slots[0], mech) != PR_TRUE) {
+        fprintf(stderr, "[Slot %s / Token %s] Default slot does not support AES mechanism %lx: skipping.\n", PK11_GetSlotName(slots[0]), PK11_GetTokenName(slots[0]), mech);
         return TEST_SKIP;
     }
 
-    unsigned int ciphertextLen = 0;
+    unsigned int *ciphertextLens = calloc(num_slots, sizeof(unsigned int));
     unsigned int maxLen = dataLen + 128; // Overhead for included IV, if any.
-    unsigned char *ciphertext = calloc(maxLen, sizeof(unsigned char));
+    unsigned char **ciphertexts = calloc(num_slots, sizeof(unsigned char *));
 
-    if (PK11_Encrypt(key, mech, param, ciphertext, &ciphertextLen, maxLen, data, dataLen) != SECSuccess) {
-        PRErrorCode code = PORT_GetError();
-        const char *message = PORT_ErrorToString(code);
-        fprintf(stderr, "[Slot %s / Token %s] Failed to do AES encrypt operation %lx: (%d) %s\n", PK11_GetSlotName(slot), PK11_GetTokenName(slot), mech, code, message);
-        return TEST_ERROR;
+    for (size_t index = 0; index < num_slots; index++) {
+        PK11SlotInfo *slot = slots[index];
+        PK11SymKey *key = keys[index];
+
+        ciphertexts[0] = calloc(maxLen, sizeof(unsigned char));
+
+        if (PK11_Encrypt(key, mech, param, ciphertexts[index], ciphertextLens + index, maxLen, data, dataLen) != SECSuccess) {
+            PRErrorCode code = PORT_GetError();
+            const char *message = PORT_ErrorToString(code);
+            fprintf(stderr, "[Slot %s / Token %s] Failed to do AES encrypt operation %lx: (%d) %s\n", PK11_GetSlotName(slot), PK11_GetTokenName(slot), mech, code, message);
+            return TEST_ERROR;
+        }
+
+        if (ciphertextLens[index] == dataLen && memcmp(data, ciphertexts[index], dataLen) == 0) {
+            fprintf(stderr, "[Slot %s / Token %s] Encryption %lx did nothing: ciphertext same as plaintext.\n", PK11_GetSlotName(slot), PK11_GetTokenName(slot), mech);
+            return TEST_ERROR;
+        }
+
+        // We don't store this between calls since this is a known-answer.
+        unsigned int plaintextLen = 0;
+        unsigned char *plaintext = calloc(maxLen, sizeof(unsigned char));
+        if (PK11_Decrypt(key, mech, param, plaintext, &plaintextLen, maxLen, ciphertexts[index], ciphertextLens[index]) != SECSuccess) {
+            PRErrorCode code = PORT_GetError();
+            const char *message = PORT_ErrorToString(code);
+            fprintf(stderr, "[Slot %s / Token %s] Failed to do AES decrypt operation %lx: (%d) %s\n", PK11_GetSlotName(slot), PK11_GetTokenName(slot), mech, code, message);
+            return TEST_ERROR;
+        }
+
+        if (plaintextLen != dataLen || memcmp(data, plaintext, dataLen) != 0) {
+            fprintf(stderr, "[%zu Slot %s / Token %s] Round-tripping failed: different plaintext/ciphertext: %u / %u\n\tPlaintext: %s\n\tData: %s\n", index, PK11_GetSlotName(slot), PK11_GetTokenName(slot), plaintextLen, dataLen, plaintext, data);
+            return TEST_ERROR;
+        }
+
+        free(plaintext);
     }
 
-    if (ciphertextLen == dataLen && memcmp(data, ciphertext, dataLen) == 0) {
-        fprintf(stderr, "[Slot %s / Token %s] Encryption %lx did nothing: ciphertext same as plaintext.\n", PK11_GetSlotName(slot), PK11_GetTokenName(slot), mech);
-        return TEST_ERROR;
+    unsigned int ciphertextLen = ciphertextLens[0];
+    unsigned char *ciphertext = ciphertexts[0];
+    for (size_t index = 1; index < num_slots; index++) {
+        PK11SlotInfo *slot = slots[index];
+        unsigned int otherLen = ciphertextLens[index];
+        unsigned char *other = ciphertexts[index];
+
+        if (otherLen != ciphertextLen || memcmp(ciphertext, other, ciphertextLen) != 0) {
+            fprintf(stderr, "[%d Slot %s / Token %s] vs [%zu Slot %s / Token %s] Comparison test failed: different ciphertexts: %u / %u\n\tDefault Ciphertext: %s\n\tOther Ciphertext: %s\n", 0, PK11_GetSlotName(slots[0]), PK11_GetTokenName(slots[0]), index, PK11_GetSlotName(slot), PK11_GetTokenName(slot), ciphertextLen, otherLen, ciphertext, other);
+            return TEST_ERROR;
+        }
+
+        free(other);
     }
 
-    unsigned int plaintextLen = 0;
-    unsigned char *plaintext = calloc(maxLen, sizeof(unsigned char));
-
-    if (PK11_Decrypt(key, mech, param, plaintext, &plaintextLen, maxLen, ciphertext, ciphertextLen) != SECSuccess) {
-        PRErrorCode code = PORT_GetError();
-        const char *message = PORT_ErrorToString(code);
-        fprintf(stderr, "[Slot %s / Token %s] Failed to do AES decrypt operation %lx: (%d) %s\n", PK11_GetSlotName(slot), PK11_GetTokenName(slot), mech, code, message);
-        return TEST_ERROR;
-    }
-
-    if (plaintextLen != dataLen || memcmp(data, plaintext, dataLen) != 0) {
-        fprintf(stderr, "[Slot %s / Token %s] Round-tripping failed: different plaintext/ciphertext: %u / %u\n\tPlaintext: %s\n\tData: %s\n", PK11_GetSlotName(slot), PK11_GetTokenName(slot), plaintextLen, dataLen, plaintext, data);
-        return TEST_ERROR;
-    }
-
-    free(ciphertext);
-    free(plaintext);
-
+    free(ciphertexts[0]);
+    free(ciphertextLens);
+    free(ciphertexts);
     return TEST_OK;
 }
 
-test_ret_t doAESECBOp(PK11SlotInfo *slot, PK11SymKey *key, const unsigned char *data, unsigned int dataLen) {
+test_ret_t doAESECBOp(PK11SlotInfo **slots, PK11SymKey **keys, size_t num_slots, const unsigned char *data, unsigned int dataLen) {
     if ((dataLen % 16) != 0) {
         return TEST_SKIP;
     }
 
-    return doAESOp(slot, key, CKM_AES_ECB, NULL, data, dataLen);
+    return doAESOp(slots, keys, num_slots, CKM_AES_ECB, NULL, data, dataLen);
 }
 
 SECItem *getIVParam(const unsigned char *iv, unsigned int ivLen) {
@@ -136,7 +209,7 @@ void freeIVParam(SECItem *param) {
     free(param);
 }
 
-test_ret_t doAESCBCOp(PK11SlotInfo *slot, PK11SymKey *key, const unsigned char *data, unsigned int dataLen, const unsigned char *iv, unsigned int ivLen) {
+test_ret_t doAESCBCOp(PK11SlotInfo **slots, PK11SymKey **keys, size_t num_slots, const unsigned char *data, unsigned int dataLen, const unsigned char *iv, unsigned int ivLen) {
     if ((dataLen % 16) != 0) {
         return TEST_SKIP;
     }
@@ -146,25 +219,25 @@ test_ret_t doAESCBCOp(PK11SlotInfo *slot, PK11SymKey *key, const unsigned char *
     }
 
     SECItem *ivParam = getIVParam(iv, ivLen);
-    test_ret_t ret = doAESOp(slot, key, CKM_AES_CBC_PAD, ivParam, data, dataLen);
+    test_ret_t ret = doAESOp(slots, keys, num_slots, CKM_AES_CBC_PAD, ivParam, data, dataLen);
     freeIVParam(ivParam);
 
     return ret;
 }
 
-test_ret_t doAESCBCPadOp(PK11SlotInfo *slot, PK11SymKey *key, const unsigned char *data, unsigned int dataLen, const unsigned char *iv, unsigned int ivLen) {
+test_ret_t doAESCBCPadOp(PK11SlotInfo **slots, PK11SymKey **keys, size_t num_slots, const unsigned char *data, unsigned int dataLen, const unsigned char *iv, unsigned int ivLen) {
     if (ivLen != 16) {
         return TEST_SKIP;
     }
 
     SECItem *ivParam = getIVParam(iv, ivLen);
-    test_ret_t ret = doAESOp(slot, key, CKM_AES_CBC_PAD, ivParam, data, dataLen);
+    test_ret_t ret = doAESOp(slots, keys, num_slots, CKM_AES_CBC_PAD, ivParam, data, dataLen);
     freeIVParam(ivParam);
 
     return ret;
 }
 
-test_ret_t doAESCTROp(PK11SlotInfo *slot, PK11SymKey *key, const unsigned char *data, unsigned int dataLen, unsigned int ctrLen, const unsigned char *iv, unsigned int ivLen) {
+test_ret_t doAESCTROp(PK11SlotInfo **slots, PK11SymKey **keys, size_t num_slots, const unsigned char *data, unsigned int dataLen, unsigned int ctrLen, const unsigned char *iv, unsigned int ivLen) {
     if (ivLen != 16) {
         return TEST_SKIP;
     }
@@ -178,10 +251,10 @@ test_ret_t doAESCTROp(PK11SlotInfo *slot, PK11SymKey *key, const unsigned char *
     memcpy(ctr.cb, iv, 16);
     SECItem ctrParam = {siBuffer, (unsigned char *)&ctr, sizeof(ctr)};
 
-    return doAESOp(slot, key, CKM_AES_CTR, &ctrParam, data, dataLen);
+    return doAESOp(slots, keys, num_slots, CKM_AES_CTR, &ctrParam, data, dataLen);
 }
 
-test_ret_t doAESGCMOp(PK11SlotInfo *slot, PK11SymKey *key, const unsigned char *data, unsigned int dataLen, const unsigned char *iv, unsigned int ivLen, const unsigned char *aad, unsigned int aadLen) {
+test_ret_t doAESGCMOp(PK11SlotInfo **slots, PK11SymKey **keys, size_t num_slots, const unsigned char *data, unsigned int dataLen, const unsigned char *iv, unsigned int ivLen, const unsigned char *aad, unsigned int aadLen) {
     if (ivLen != 96/8) {
         return TEST_SKIP;
     }
@@ -196,11 +269,18 @@ test_ret_t doAESGCMOp(PK11SlotInfo *slot, PK11SymKey *key, const unsigned char *
     };
     SECItem gcmParam = {siBuffer, (unsigned char *)&gcm, sizeof(gcm)};
 
-    return doAESOp(slot, key, CKM_AES_GCM, &gcmParam, data, dataLen);
+    return doAESOp(slots, keys, num_slots, CKM_AES_GCM, &gcmParam, data, dataLen);
 }
 
-test_ret_t testAESOp(PK11SlotInfo *slot, PK11SymKey *key, CK_MECHANISM_TYPE mech) {
-    for (int attempt = 0; attempt < 10; attempt++) {
+test_ret_t testAESOp(PK11SlotInfo **slots, size_t num_slots, CK_MECHANISM_TYPE mech) {
+    PK11SymKey **keys = calloc(num_slots, sizeof(PK11SymKey *));
+    CK_FLAGS opFlags = CKF_ENCRYPT | CKF_DECRYPT;
+    if (establishSymKeyOnSlots(slots, num_slots, CKM_AES_KEY_GEN, 16, opFlags, keys) == SECFailure) {
+        fprintf(stderr, "Failed to generate fresh AES keys on slots.\n");
+        return TEST_ERROR;
+    }
+
+    for (int attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
         unsigned int dataLen = 0;
         unsigned int upperBound = 8192;
         unsigned int multiple = 1;
@@ -265,19 +345,19 @@ test_ret_t testAESOp(PK11SlotInfo *slot, PK11SymKey *key, CK_MECHANISM_TYPE mech
         test_ret_t ret;
         switch (mech) {
         case CKM_AES_ECB:
-            ret = doAESECBOp(slot, key, data, dataLen);
+            ret = doAESECBOp(slots, keys, num_slots, data, dataLen);
             break;
         case CKM_AES_CBC:
-            ret = doAESCBCOp(slot, key, data, dataLen, iv, ivLen);
+            ret = doAESCBCOp(slots, keys, num_slots, data, dataLen, iv, ivLen);
             break;
         case CKM_AES_CBC_PAD:
-            ret = doAESCBCPadOp(slot, key, data, dataLen, iv, ivLen);
+            ret = doAESCBCPadOp(slots, keys, num_slots, data, dataLen, iv, ivLen);
             break;
         case CKM_AES_CTR:
-            ret = doAESCTROp(slot, key, data, dataLen, ctrLen, iv, ivLen);
+            ret = doAESCTROp(slots, keys, num_slots, data, dataLen, ctrLen, iv, ivLen);
             break;
         case CKM_AES_GCM:
-            ret = doAESGCMOp(slot, key, data, dataLen, iv, ivLen, aad, aadLen);
+            ret = doAESGCMOp(slots, keys, num_slots, data, dataLen, iv, ivLen, aad, aadLen);
             break;
         default:
             fprintf(stderr, "Unknown mechanism to testAESOp: %lx\n", mech);
@@ -300,55 +380,65 @@ test_ret_t testAESOp(PK11SlotInfo *slot, PK11SymKey *key, CK_MECHANISM_TYPE mech
     return TEST_ERROR;
 }
 
-test_ret_t doHMACOp(PK11SlotInfo *slot, PK11SymKey *key, CK_MECHANISM_TYPE mech, const unsigned char *data, unsigned int dataLen) {
-    if (PK11_DoesMechanism(slot, mech) != PR_TRUE) {
-        fprintf(stderr, "Slot %s / Token %s does not support HMAC mechanism %lx: skipping.\n", PK11_GetSlotName(slot), PK11_GetTokenName(slot), mech);
+test_ret_t doHMACOp(PK11SlotInfo **slots, PK11SymKey **keys, size_t num_slots, CK_MECHANISM_TYPE mech, const unsigned char *data, unsigned int dataLen) {
+    if (PK11_DoesMechanism(slots[0], mech) != PR_TRUE) {
+        fprintf(stderr, "Default Slot [Slot %s / Token %s] does not support HMAC mechanism %lx: skipping.\n", PK11_GetSlotName(slots[0]), PK11_GetTokenName(slots[0]), mech);
         return TEST_SKIP;
     }
 
-    unsigned int signatureLen = 0;
+    unsigned int *signatureLens = calloc(num_slots, sizeof(unsigned int));
     unsigned int maxLen = MAX_HMAC_OUTPUT_LEN;
-    unsigned char *signature = calloc(maxLen, sizeof(unsigned char));
+    unsigned char **signatures = calloc(num_slots, sizeof(unsigned char *));
 
-    SECItem nullParam = {siBuffer, NULL, 0};
-    PK11Context *sign = PK11_CreateContextBySymKey(mech, CKA_SIGN, key, &nullParam);
-    if (sign == NULL) {
-        PRErrorCode code = PORT_GetError();
-        const char *message = PORT_ErrorToString(code);
-        fprintf(stderr, "[Slot %s / Token %s] Failed to create HMAC sign context for %lx: (%d) %s\n", PK11_GetSlotName(slot), PK11_GetTokenName(slot), mech, code, message);
-        return TEST_ERROR;
+    for (size_t index = 0; index < num_slots; index++) {
+        PK11SlotInfo *slot = slots[index];
+        PK11SymKey *key = keys[index];
+        signatures[index] = calloc(maxLen, sizeof(unsigned char));
+        SECItem nullParam = {siBuffer, NULL, 0};
+
+        PK11Context *sign = PK11_CreateContextBySymKey(mech, CKA_SIGN, key, &nullParam);
+        if (sign == NULL) {
+            PRErrorCode code = PORT_GetError();
+            const char *message = PORT_ErrorToString(code);
+            fprintf(stderr, "[%zu Slot %s / Token %s] Failed to create HMAC sign context for %lx: (%d) %s\n", index, PK11_GetSlotName(slot), PK11_GetTokenName(slot), mech, code, message);
+            return TEST_ERROR;
+        }
+
+        if (PK11_DigestOp(sign, data, dataLen) != SECSuccess) {
+            PRErrorCode code = PORT_GetError();
+            const char *message = PORT_ErrorToString(code);
+            fprintf(stderr, "[%zu Slot %s / Token %s] Failed to do HMAC sign for %lx: (%d) %s\n", index, PK11_GetSlotName(slot), PK11_GetTokenName(slot), mech, code, message);
+            return TEST_ERROR;
+        }
+
+        if (PK11_DigestFinal(sign, signatures[index], signatureLens + index, maxLen) != SECSuccess) {
+            PRErrorCode code = PORT_GetError();
+            const char *message = PORT_ErrorToString(code);
+            fprintf(stderr, "[%zu Slot %s / Token %s] Failed to finalize HMAC sign for %lx: (%d) %s\n", index, PK11_GetSlotName(slot), PK11_GetTokenName(slot), mech, code, message);
+            return TEST_ERROR;
+        }
+
+        if (signatureLens[index] == dataLen && memcmp(data, signatures[index], dataLen) == 0) {
+            fprintf(stderr, "[%zu Slot %s / Token %s] Signature %lx did nothing: signature same as plaintext.\n", index, PK11_GetSlotName(slot), PK11_GetTokenName(slot), mech);
+            return TEST_ERROR;
+        }
+
+        PK11_DestroyContext(sign, PR_TRUE);
     }
 
-    if (PK11_DigestOp(sign, data, dataLen) != SECSuccess) {
-        PRErrorCode code = PORT_GetError();
-        const char *message = PORT_ErrorToString(code);
-        fprintf(stderr, "[Slot %s / Token %s] Failed to do HMAC sign for %lx: (%d) %s\n", PK11_GetSlotName(slot), PK11_GetTokenName(slot), mech, code, message);
-        return TEST_ERROR;
-    }
-
-    if (PK11_DigestFinal(sign, signature, &signatureLen, maxLen) != SECSuccess) {
-        PRErrorCode code = PORT_GetError();
-        const char *message = PORT_ErrorToString(code);
-        fprintf(stderr, "[Slot %s / Token %s] Failed to finalize HMAC sign for %lx: (%d) %s\n", PK11_GetSlotName(slot), PK11_GetTokenName(slot), mech, code, message);
-        return TEST_ERROR;
-    }
-
-    if (signatureLen == dataLen && memcmp(data, signature, dataLen) == 0) {
-        fprintf(stderr, "[Slot %s / Token %s] Signature %lx did nothing: signature same as plaintext.\n", PK11_GetSlotName(slot), PK11_GetTokenName(slot), mech);
-        return TEST_ERROR;
-    }
-
-    // Verification would best be done by another token, but when we add
-    // multiple slot support and compare the output, we should get the same
-    // result as for HMAC, verify is recomputing the HMAC over the original
-    // data and comparing the output.
-
-    PK11_DestroyContext(sign, PR_TRUE);
-    free(signature);
+    free(signatureLens);
+    free(signatures);
     return TEST_OK;
 }
 
-test_ret_t testHMACOp(PK11SlotInfo *slot, PK11SymKey *key, CK_MECHANISM_TYPE mech) {
+test_ret_t testHMACOp(PK11SlotInfo **slots, size_t num_slots, CK_MECHANISM_TYPE mech) {
+    PK11SymKey **keys = calloc(num_slots, sizeof(PK11SymKey *));
+    CK_FLAGS opFlags = CKF_SIGN | CKF_VERIFY;
+    if (establishSymKeyOnSlots(slots, num_slots, CKM_SHA256_HMAC, 16, opFlags, keys) == SECFailure) {
+        fprintf(stderr, "Failed to generate fresh HMAC keys on slots.\n");
+        return TEST_ERROR;
+    }
+
     for (int attempt = 0; attempt < 10; attempt++) {
         unsigned int dataLen = 0;
         unsigned int upperBound = 8192;
@@ -364,7 +454,7 @@ test_ret_t testHMACOp(PK11SlotInfo *slot, PK11SymKey *key, CK_MECHANISM_TYPE mec
             return TEST_ERROR;
         }
 
-        test_ret_t ret = doHMACOp(slot, key, mech, data, dataLen);
+        test_ret_t ret = doHMACOp(slots, keys, num_slots, mech, data, dataLen);
         free(data);
         if (ret == TEST_SKIP) {
             fprintf(stderr, "Skipping mechanism this time due to incorrect parameters...\n");

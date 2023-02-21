@@ -1,6 +1,7 @@
 #include <string.h>
 #include <strings.h>
 #include <stdbool.h>
+#include <assert.h>
 
 #include <plstr.h>
 #include <secitem.h>
@@ -23,7 +24,9 @@ char *strdup(const char *s) {
     return ret;
 }
 
-void parseMainArgs(int argc, int *offset, const char **argv, const char **database, const char **slot_name, char **pin, int *iters) {
+void parseMainArgs(int argc, const char **argv, int *offset, const char **database, size_t *num_slots, char **slot_names, char **pins, int *iters) {
+    size_t max_slots = *num_slots;
+    *num_slots = 0;
     for (; *offset < argc; *offset = (*offset) + 1) {
         if (strcmp("-h", argv[*offset]) == 0) {
             *offset = -1;
@@ -43,7 +46,13 @@ void parseMainArgs(int argc, int *offset, const char **argv, const char **databa
                 *offset = -1;
                 return;
             }
-            *slot_name = argv[*offset];
+            if (*num_slots >= max_slots) {
+                fprintf(stderr, "More than %zu -s options given; this is more than this program was compiled with. Recompile to test more slots.\n", max_slots);
+                *offset = -1;
+                return;
+            }
+            slot_names[*num_slots] = strdup(argv[*offset]);
+            *num_slots = (*num_slots) + 1;
         } else if (strcmp("-p", argv[*offset]) == 0) {
             *offset += 1;
             if (*offset >= argc) {
@@ -51,7 +60,7 @@ void parseMainArgs(int argc, int *offset, const char **argv, const char **databa
                 *offset = -1;
                 return;
             }
-            *pin = strdup(argv[*offset]);
+            pins[*num_slots] = strdup(argv[*offset]);
         } else if (strcmp("-i", argv[*offset]) == 0) {
             *offset += 1;
             if (*offset >= argc) {
@@ -112,14 +121,7 @@ void listSlotInfo(PK11SlotInfo *slot) {
     }
 }
 
-int doAESTests(PK11SlotInfo *slot, int iterations) {
-    CK_FLAGS opFlags = CKF_ENCRYPT | CKF_DECRYPT;
-    PK11SymKey *key = PK11_TokenKeyGenWithFlags(slot, CKM_AES_KEY_GEN, NULL, 16, NULL, opFlags, 0, NULL);
-    if (key == NULL) {
-        fprintf(stderr, "Failed to generate AES key.\n");
-        return 1;
-    }
-
+int doAESTests(PK11SlotInfo **slots, size_t num_slots, int iterations) {
     CK_MECHANISM_TYPE mechs[] = {
         CKM_AES_ECB,
         CKM_AES_CBC,
@@ -133,7 +135,7 @@ int doAESTests(PK11SlotInfo *slot, int iterations) {
     for (size_t mech_index = 0; mech_index < sizeof(mechs)/sizeof(mechs[0]); mech_index++) {
         CK_MECHANISM_TYPE mech = mechs[mech_index];
         for (int i = 0; i < iterations; i++) {
-            test_ret_t ret = testAESOp(slot, key, mech);
+            test_ret_t ret = testAESOp(slots, num_slots, mech);
             if (ret != TEST_OK) {
                 fprintf(stderr, "[%d] Failed to do mechanism test: %lx - %d\n", i, mech, ret);
                 return 2;
@@ -141,18 +143,10 @@ int doAESTests(PK11SlotInfo *slot, int iterations) {
         }
     }
 
-    PK11_FreeSymKey(key);
     return 0;
 }
 
-int doHMACTests(PK11SlotInfo *slot, int iterations) {
-    CK_FLAGS opFlags = CKF_SIGN | CKF_VERIFY;
-    PK11SymKey *key = PK11_TokenKeyGenWithFlags(slot, CKM_SHA256_HMAC, NULL, 16, NULL, opFlags, 0, NULL);
-    if (key == NULL) {
-        fprintf(stderr, "Failed to generate HMAC key.\n");
-        return 1;
-    }
-
+int doHMACTests(PK11SlotInfo **slots, size_t num_slots, int iterations) {
     CK_MECHANISM_TYPE mechs[] = {
         CKM_SHA224_HMAC,
         CKM_SHA256_HMAC,
@@ -165,7 +159,7 @@ int doHMACTests(PK11SlotInfo *slot, int iterations) {
     for (size_t mech_index = 0; mech_index < sizeof(mechs)/sizeof(mechs[0]); mech_index++) {
         CK_MECHANISM_TYPE mech = mechs[mech_index];
         for (int i = 0; i < iterations; i++) {
-            test_ret_t ret = testHMACOp(slot, key, mech);
+            test_ret_t ret = testHMACOp(slots, num_slots, mech);
             if (ret != TEST_OK) {
                 fprintf(stderr, "[%d] Failed to do mechanism test: %lx - %d\n", i, mech, ret);
                 return 2;
@@ -173,18 +167,17 @@ int doHMACTests(PK11SlotInfo *slot, int iterations) {
         }
     }
 
-    PK11_FreeSymKey(key);
     return 0;
 }
 
-int doTests(PK11SlotInfo *slot, int iterations) {
-    int ret = doAESTests(slot, iterations);
+int doTests(PK11SlotInfo **slots, size_t num_slots, int iterations) {
+    int ret = doAESTests(slots, num_slots, iterations);
     if (ret != 0) {
         fprintf(stderr, "Failed AES tests.\n");
         return ret;
     }
 
-    ret = doHMACTests(slot, iterations);
+    ret = doHMACTests(slots, num_slots, iterations);
     if (ret != 0) {
         fprintf(stderr, "Failed HMAC tests.\n");
         return ret;
@@ -195,15 +188,28 @@ int doTests(PK11SlotInfo *slot, int iterations) {
 
 int main(int argc, const char **argv) {
     const char *dir = "/etc/pki/nssdb";
-    const char *slot_name = "NSS Internal Cryptographic Services";
-    char *password = "12345";
-    int iterations = 1;
+    char *default_slot_name = "NSS Internal Cryptographic Services";
+    char *default_password = strdup("12345");
 
+    const size_t max_num_slots = 8;
+    size_t num_slots = max_num_slots;
+    char *slot_names[] = { default_slot_name, NULL, NULL, NULL, NULL, NULL, NULL, NULL };
+    char *passwords[] = { default_password, NULL, NULL, NULL, NULL, NULL, NULL, NULL };
+
+    static_assert(sizeof(slot_names)/sizeof(slot_names[0]) == max_num_slots);
+    static_assert(sizeof(passwords)/sizeof(passwords[0]) == max_num_slots);
+
+    int iterations = 1;
     int offset = 1;
-    parseMainArgs(argc, &offset, argv, &dir, &slot_name, &password, &iterations);
+    parseMainArgs(argc, argv, &offset, &dir, &num_slots, (char **)&slot_names, (char **)&passwords, &iterations);
     if (offset == -1) {
         fprintf(stderr, "Usage: %s [-d /path/to/nssdb] [-s slot-name] [-p pin] [-i iterations-count]\n", argv[0]);
         return 2;
+    }
+
+    if (num_slots == 0) {
+        fprintf(stderr, "Using default slots...\n");
+        num_slots = 1;
     }
 
     fprintf(stdout, "Loading NSS DB Directory: %s\n", dir);
@@ -216,33 +222,41 @@ int main(int argc, const char **argv) {
         return 1;
     }
 
-    PK11SlotInfo *slot = findSlot(slot_name);
-    if (slot == NULL) {
-        fprintf(stderr, "No slot found for name: %s.\n", slot_name);
-        return 1;
-    }
+    PK11SlotInfo *slots[] = {NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL};
+    for (size_t slot_index = 0; slot_index < max_num_slots && slot_index < num_slots; slot_index++) {
+        char *slot_name = slot_names[slot_index];
+        char *password = passwords[slot_index];
+        if (slot_name == NULL) {
+            break;
+        }
 
-    if (PK11_IsLoggedIn(slot, NULL) != PR_TRUE) {
-        fprintf(stderr, "Slot is not logged in.\n");
-
-        PK11_SetPasswordFunc(staticPassFunc);
-        if (PK11_Authenticate(slot, PR_FALSE, password) != SECSuccess) {
-            fprintf(stderr, "Unable to authenticate.\n");
+        PK11SlotInfo *slot = findSlot(slot_name);
+        if (slot == NULL) {
+            fprintf(stderr, "No slot found for name: %s.\n", slot_name);
             return 1;
         }
+
+        if (PK11_IsLoggedIn(slot, NULL) != PR_TRUE) {
+            fprintf(stderr, "Slot is not logged in.\n");
+
+            PK11_SetPasswordFunc(staticPassFunc);
+            if (PK11_Authenticate(slot, PR_FALSE, password) != SECSuccess) {
+                fprintf(stderr, "Unable to authenticate.\n");
+                return 1;
+            }
+        }
+
+        fprintf(stdout, "[%zu] Adding slot: slot:%s token:%s.\n", slot_index, PK11_GetSlotName(slot), PK11_GetTokenName(slot));
+        listSlotInfo(slot);
+        slots[slot_index] = slot;
     }
 
-    fprintf(stdout, "Operating on slot: slot:%s token:%s.\n", PK11_GetSlotName(slot), PK11_GetTokenName(slot));
-    listSlotInfo(slot);
-
-    fprintf(stdout, "sizeof(CK_MECHANISM_TYPE) = %zu\n", sizeof(CK_MECHANISM_TYPE));
-
-    if (doTests(slot, iterations) != 0) {
+    if (doTests(slots, num_slots, iterations) != 0) {
         fprintf(stderr, "Tests failed.\n");
         return 1;
     }
 
-    PK11_FreeSlot(slot);
+    PK11_FreeSlot(slots[0]);
     NSS_Shutdown();
     return 0;
 }
