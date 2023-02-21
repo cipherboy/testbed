@@ -30,3 +30,4 @@ test_ret_t doAESCTROp(PK11SlotInfo *slot, PK11SymKey *key, const unsigned char *
 test_ret_t doAESGCMOp(PK11SlotInfo *slot, PK11SymKey *key, const unsigned char *data, unsigned int dataLen, const unsigned char *iv, unsigned int ivLen, const unsigned char *aad, unsigned int aadLen);
 
 test_ret_t testAESOp(PK11SlotInfo *slot, PK11SymKey *key, CK_MECHANISM_TYPE mech);
+test_ret_t testHMACOp(PK11SlotInfo *slot, PK11SymKey *key, CK_MECHANISM_TYPE mech);

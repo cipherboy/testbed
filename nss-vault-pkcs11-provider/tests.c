@@ -14,6 +14,8 @@
 
 #include "tests.h"
 
+#define MAX_HMAC_OUTPUT_LEN 512
+
 SECStatus randUint(uint32_t *value) {
     return PK11_GenerateRandom((unsigned char *)value, sizeof(uint32_t)/sizeof(unsigned char));
 }
@@ -71,7 +73,7 @@ SECStatus randChoice(void **choice, void **pile, uint32_t count) {
 
 test_ret_t doAESOp(PK11SlotInfo *slot, PK11SymKey *key, CK_MECHANISM_TYPE mech, SECItem *param, const unsigned char *data, unsigned int dataLen) {
     if (PK11_DoesMechanism(slot, mech) != PR_TRUE) {
-        fprintf(stderr, "Slot %s / Token %s does not support mechanism %lx: skipping.\n", PK11_GetSlotName(slot), PK11_GetTokenName(slot), mech);
+        fprintf(stderr, "Slot %s / Token %s does not support AES mechanism %lx: skipping.\n", PK11_GetSlotName(slot), PK11_GetTokenName(slot), mech);
         return TEST_SKIP;
     }
 
@@ -198,7 +200,7 @@ test_ret_t doAESGCMOp(PK11SlotInfo *slot, PK11SymKey *key, const unsigned char *
 }
 
 test_ret_t testAESOp(PK11SlotInfo *slot, PK11SymKey *key, CK_MECHANISM_TYPE mech) {
-    while (true) {
+    for (int attempt = 0; attempt < 10; attempt++) {
         unsigned int dataLen = 0;
         unsigned int upperBound = 8192;
         unsigned int multiple = 1;
@@ -282,13 +284,96 @@ test_ret_t testAESOp(PK11SlotInfo *slot, PK11SymKey *key, CK_MECHANISM_TYPE mech
             ret = TEST_ERROR;
         }
 
+        free(data);
+        free(iv);
+        free(aad);
+
         if (ret == TEST_SKIP) {
-            fprintf(stderr, "Skipping mechanism...\n");
+            fprintf(stderr, "Skipping mechanism this time due to incorrect parameters...\n");
             continue;
         }
 
         return ret;
     }
 
+    fprintf(stderr, "Skipped all attempts at this mechanism; failing.\n");
+    return TEST_ERROR;
+}
+
+test_ret_t doHMACOp(PK11SlotInfo *slot, PK11SymKey *key, CK_MECHANISM_TYPE mech, const unsigned char *data, unsigned int dataLen) {
+    if (PK11_DoesMechanism(slot, mech) != PR_TRUE) {
+        fprintf(stderr, "Slot %s / Token %s does not support HMAC mechanism %lx: skipping.\n", PK11_GetSlotName(slot), PK11_GetTokenName(slot), mech);
+        return TEST_SKIP;
+    }
+
+    unsigned int signatureLen = 0;
+    unsigned int maxLen = MAX_HMAC_OUTPUT_LEN;
+    unsigned char *signature = calloc(maxLen, sizeof(unsigned char));
+
+    SECItem nullParam = {siBuffer, NULL, 0};
+    PK11Context *sign = PK11_CreateContextBySymKey(mech, CKA_SIGN, key, &nullParam);
+    if (sign == NULL) {
+        PRErrorCode code = PORT_GetError();
+        const char *message = PORT_ErrorToString(code);
+        fprintf(stderr, "[Slot %s / Token %s] Failed to create HMAC sign context for %lx: (%d) %s\n", PK11_GetSlotName(slot), PK11_GetTokenName(slot), mech, code, message);
+        return TEST_ERROR;
+    }
+
+    if (PK11_DigestOp(sign, data, dataLen) != SECSuccess) {
+        PRErrorCode code = PORT_GetError();
+        const char *message = PORT_ErrorToString(code);
+        fprintf(stderr, "[Slot %s / Token %s] Failed to do HMAC sign for %lx: (%d) %s\n", PK11_GetSlotName(slot), PK11_GetTokenName(slot), mech, code, message);
+        return TEST_ERROR;
+    }
+
+    if (PK11_DigestFinal(sign, signature, &signatureLen, maxLen) != SECSuccess) {
+        PRErrorCode code = PORT_GetError();
+        const char *message = PORT_ErrorToString(code);
+        fprintf(stderr, "[Slot %s / Token %s] Failed to finalize HMAC sign for %lx: (%d) %s\n", PK11_GetSlotName(slot), PK11_GetTokenName(slot), mech, code, message);
+        return TEST_ERROR;
+    }
+
+    if (signatureLen == dataLen && memcmp(data, signature, dataLen) == 0) {
+        fprintf(stderr, "[Slot %s / Token %s] Signature %lx did nothing: signature same as plaintext.\n", PK11_GetSlotName(slot), PK11_GetTokenName(slot), mech);
+        return TEST_ERROR;
+    }
+
+    // Verification would best be done by another token, but when we add
+    // multiple slot support and compare the output, we should get the same
+    // result as for HMAC, verify is recomputing the HMAC over the original
+    // data and comparing the output.
+
+    PK11_DestroyContext(sign, PR_TRUE);
+    free(signature);
+    return TEST_OK;
+}
+
+test_ret_t testHMACOp(PK11SlotInfo *slot, PK11SymKey *key, CK_MECHANISM_TYPE mech) {
+    for (int attempt = 0; attempt < 10; attempt++) {
+        unsigned int dataLen = 0;
+        unsigned int upperBound = 8192;
+
+        if (nextUint(&dataLen, 1, upperBound) == SECFailure) {
+            fprintf(stderr, "Error reading data length in range [%u, %u).\n", 1, upperBound);
+            return TEST_ERROR;
+        }
+
+        unsigned char *data = calloc(dataLen + 1, sizeof(unsigned char));
+        if (PK11_GenerateRandom(data, dataLen) != SECSuccess) {
+        fprintf(stderr, "Error reading data of length %u.\n", dataLen);
+            return TEST_ERROR;
+        }
+
+        test_ret_t ret = doHMACOp(slot, key, mech, data, dataLen);
+        free(data);
+        if (ret == TEST_SKIP) {
+            fprintf(stderr, "Skipping mechanism this time due to incorrect parameters...\n");
+            continue;
+        }
+
+        return ret;
+    }
+
+    fprintf(stderr, "Skipped all attempts at this mechanism; failing.\n");
     return TEST_ERROR;
 }

@@ -145,8 +145,52 @@ int doAESTests(PK11SlotInfo *slot, int iterations) {
     return 0;
 }
 
-int doEncryptTests(PK11SlotInfo *slot, int iterations) {
-    return doAESTests(slot, iterations);
+int doHMACTests(PK11SlotInfo *slot, int iterations) {
+    CK_FLAGS opFlags = CKF_SIGN | CKF_VERIFY;
+    PK11SymKey *key = PK11_TokenKeyGenWithFlags(slot, CKM_SHA256_HMAC, NULL, 16, NULL, opFlags, 0, NULL);
+    if (key == NULL) {
+        fprintf(stderr, "Failed to generate HMAC key.\n");
+        return 1;
+    }
+
+    CK_MECHANISM_TYPE mechs[] = {
+        CKM_SHA224_HMAC,
+        CKM_SHA256_HMAC,
+        CKM_SHA384_HMAC,
+        CKM_SHA512_HMAC,
+        CKM_SHA512_224_HMAC,
+        CKM_SHA512_256_HMAC,
+    };
+
+    for (size_t mech_index = 0; mech_index < sizeof(mechs)/sizeof(mechs[0]); mech_index++) {
+        CK_MECHANISM_TYPE mech = mechs[mech_index];
+        for (int i = 0; i < iterations; i++) {
+            test_ret_t ret = testHMACOp(slot, key, mech);
+            if (ret != TEST_OK) {
+                fprintf(stderr, "[%d] Failed to do mechanism test: %lx - %d\n", i, mech, ret);
+                return 2;
+            }
+        }
+    }
+
+    PK11_FreeSymKey(key);
+    return 0;
+}
+
+int doTests(PK11SlotInfo *slot, int iterations) {
+    int ret = doAESTests(slot, iterations);
+    if (ret != 0) {
+        fprintf(stderr, "Failed AES tests.\n");
+        return ret;
+    }
+
+    ret = doHMACTests(slot, iterations);
+    if (ret != 0) {
+        fprintf(stderr, "Failed HMAC tests.\n");
+        return ret;
+    }
+
+    return 0;
 }
 
 int main(int argc, const char **argv) {
@@ -193,8 +237,8 @@ int main(int argc, const char **argv) {
 
     fprintf(stdout, "sizeof(CK_MECHANISM_TYPE) = %zu\n", sizeof(CK_MECHANISM_TYPE));
 
-    if (doEncryptTests(slot, iterations) != 0) {
-        fprintf(stderr, "Encryption tests failed.\n");
+    if (doTests(slot, iterations) != 0) {
+        fprintf(stderr, "Tests failed.\n");
         return 1;
     }
 
