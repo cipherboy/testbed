@@ -7,7 +7,7 @@ build:
 	gcc -Og -ggdb -DDEBUG -Wall -Werror -Wextra -std=c11 tests.c main.c $(shell pkg-config --cflags --libs nss) -o nss-validator
 
 debug-build:
-	gcc -Og -ggdb -DDEBUG -Wall -Werror -Wextra -std=c11 tests.c main.c -I/home/cipherboy/GitHub/nss-dev/dist/public/nss -I/home/cipherboy/GitHub/nss-dev/dist/Debug/include/nspr -L/home/cipherboy/GitHub/nss-dev/dist/Debug/lib -lnss3 -lnssutil3 -lsmime3 -lssl3 -lplds4 -lplc4 -lnspr4 -o nss-validator
+	gcc -Og -ggdb -DDEBUG -Wall -Werror -Wextra -std=c11 tests.c main.c -I/home/cipherboy/GitHub/nss-dev/dist/public/nss -I/home/cipherboy/GitHub/nss-dev/dist/Debug/include/nspr -L/home/cipherboy/GitHub/nss-dev/dist/Debug/lib -Wl,-rpath=/home/cipherboy/GitHub/nss-dev/dist/Debug/lib -Wl,-rpath-link=/home/cipherboy/GitHub/nss-dev/dist/Debug/lib  -lnss3 -lnssutil3 -lsmime3 -lssl3 -lplds4 -lplc4 -lnspr4 -Wl,-rpath=/home/cipherboy/GitHub/nss-dev/dist/Debug/lib -Wl,-rpath-link=/home/cipherboy/GitHub/nss-dev/dist/Debug/lib -o nss-validator
 
 database:
 	rm -rf nssdb && mkdir -p nssdb && certutil -N -d nssdb --empty-password && modutil -add vault-pkcs11-provider -libfile ${LIBRARY} -dbdir nssdb -force

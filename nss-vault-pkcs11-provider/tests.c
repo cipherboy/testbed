@@ -11,11 +11,20 @@
 #include <pkcs11t.h>
 #include <base64.h>
 #include <nss.h>
+#include <secport.h>
 
 #include "tests.h"
 
+#define MAX_OBJECT_ATTRS 15
 #define MAX_ATTEMPTS 10
 #define MAX_HMAC_OUTPUT_LEN 512
+
+// secmodi.h from the NSS distribution.
+SECStatus PK11_CreateNewObject(PK11SlotInfo *slot, CK_SESSION_HANDLE session,
+                               const CK_ATTRIBUTE *theTemplate, int count,
+                               PRBool token, CK_OBJECT_HANDLE *objectID);
+CK_SESSION_HANDLE pk11_GetNewSession(PK11SlotInfo *slot, PRBool *owner);
+void pk11_CloseSession(PK11SlotInfo *slot, CK_SESSION_HANDLE sess, PRBool own);
 
 SECStatus randUint(uint32_t *value) {
     return PK11_GenerateRandom((unsigned char *)value, sizeof(uint32_t)/sizeof(unsigned char));
@@ -82,6 +91,18 @@ PRBool ensureAllDoMech(PK11SlotInfo **slots, size_t num_slots, CK_MECHANISM_TYPE
     return PR_TRUE;
 }
 
+void reduceTemplate(CK_ATTRIBUTE *template, int *count) {
+    int offset = 0;
+    for (int i = 0; i < *count; i++) {
+        if (template[i].pValue != NULL && i != offset) {
+            template[offset] = template[i];
+            offset += 1;
+        }
+    }
+
+    *count = offset+1;
+}
+
 SECStatus establishSymKeyOnSlots(PK11SlotInfo **slots, size_t num_slots, CK_MECHANISM_TYPE mech, unsigned int bits, CK_FLAGS opFlags, PK11SymKey **keys) {
     if (ensureAllDoMech(slots, num_slots, mech) == PR_FALSE) {
         fprintf(stderr, "One or more slots don't do the requested mechanism: %lx.\n", mech);
@@ -110,8 +131,67 @@ SECStatus establishSymKeyOnSlots(PK11SlotInfo **slots, size_t num_slots, CK_MECH
         if (dest_key == NULL) {
             PRErrorCode code = PORT_GetError();
             const char *message = PORT_ErrorToString(code);
-            fprintf(stderr, "[Slot %s / Token %s]->[Slot %s / Token %s] Failed to move symmetric key with mechanism %lx to destination slot: (%d) %s\n", PK11_GetSlotName(default_slot), PK11_GetTokenName(default_slot), PK11_GetSlotName(dest_slot), PK11_GetTokenName(dest_slot), mech, code, message);
-            return SECFailure;
+            fprintf(stderr, "[Slot %s / Token %s]->[Slot %s / Token %s] Failed to move symmetric key with mechanism %lx to destination slot via PK11_MoveSymKey(...): (%d) %s\n", PK11_GetSlotName(default_slot), PK11_GetTokenName(default_slot), PK11_GetSlotName(dest_slot), PK11_GetTokenName(dest_slot), mech, code, message);
+
+            // The above very likely will fail, as vault-pkcs11-provider
+            // lacks the ability to wrap keys currently. So we try
+            // creating an object directly on the slot.
+            CK_ATTRIBUTE *template = calloc(MAX_OBJECT_ATTRS + 1, sizeof(CK_ATTRIBUTE));
+            template[ 0].type = CKA_CLASS;
+            template[ 1].type = CKA_KEY_TYPE;
+            template[ 2].type = CKA_VALUE;
+            template[ 3].type = CKA_VALUE_LEN;
+            template[ 4].type = CKA_TOKEN;
+            template[ 5].type = CKA_ENCRYPT;
+            template[ 6].type = CKA_DECRYPT;
+            template[ 7].type = CKA_SIGN;
+            template[ 8].type = CKA_VERIFY;
+            template[ 9].type = CKA_WRAP;
+            template[10].type = CKA_UNWRAP;
+            template[11].type = CKA_MODULUS;
+            template[12].type = CKA_PUBLIC_EXPONENT;
+            template[13].type = CKA_SENSITIVE;
+            template[14].type = CKA_EXTRACTABLE;
+            if (PK11_ReadRawAttributes(NULL, PK11_TypeSymKey, key, template, MAX_OBJECT_ATTRS) != SECSuccess) {
+                PRErrorCode code = PORT_GetError();
+                const char *message = PORT_ErrorToString(code);
+                fprintf(stderr, "[Slot %s / Token %s] Failed to read symmetric key attributes to attempt move: (%d) %s\n", PK11_GetSlotName(default_slot), PK11_GetTokenName(default_slot), code, message);
+                return SECFailure;
+            }
+
+            int attrs = MAX_OBJECT_ATTRS;
+            reduceTemplate(template, &attrs);
+
+            PRBool owner = PR_TRUE;
+            PRBool *token = template[4].pValue;
+            if (token == NULL) {
+                token = malloc(sizeof(PRBool));
+                *token = PR_FALSE;
+            }
+            CK_SESSION_HANDLE sess = pk11_GetNewSession(dest_slot, &owner);
+            CK_OBJECT_HANDLE obj = CK_INVALID_HANDLE;
+            SECStatus ret = PK11_CreateNewObject(dest_slot, sess, template, attrs, *token, &obj);
+            code = PORT_GetError();
+            message = PORT_ErrorToString(code);
+            pk11_CloseSession(dest_slot, sess, owner);
+
+            if (ret != SECSuccess || obj == CK_INVALID_HANDLE) {
+                fprintf(stderr, "[Slot %s / Token %s]->[Slot %s / Token %s] Failed to recreate symmetric key with mechanism %lx to destination slot via PK11_CreateNewObject(...) with %d attributes: (%d) %s\n", PK11_GetSlotName(default_slot), PK11_GetTokenName(default_slot), PK11_GetSlotName(dest_slot), PK11_GetTokenName(dest_slot), mech, MAX_OBJECT_ATTRS, code, message);
+                return SECFailure;
+            }
+
+            for (int i = 0; i < MAX_OBJECT_ATTRS + 1; i++) {
+                PORT_Free(template[i].pValue);
+            }
+            free(template);
+
+            dest_key = PK11_SymKeyFromHandle(dest_slot, NULL, PK11_OriginGenerated, mech, obj, PR_TRUE, NULL);
+            if (dest_key == NULL) {
+                PRErrorCode code = PORT_GetError();
+                const char *message = PORT_ErrorToString(code);
+                fprintf(stderr, "[Slot %s / Token %s]->[%zu Slot %s / Token %s] Failed to turn symmetric key from handle into object: (%d) %s\n", PK11_GetSlotName(default_slot), PK11_GetTokenName(default_slot), index, PK11_GetSlotName(dest_slot), PK11_GetTokenName(dest_slot), code, message);
+                return SECFailure;
+            }
         }
 
         keys[index] = dest_key;
