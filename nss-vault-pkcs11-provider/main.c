@@ -121,6 +121,20 @@ void listSlotInfo(PK11SlotInfo *slot) {
     }
 }
 
+void listAllSlotInfos(PK11SlotInfo **slots, size_t num_slots) {
+    if (num_slots == 1) {
+        return;
+    }
+
+    fprintf(stdout, "Common mechanisms across all tokens:\n");
+    for (size_t index = 0; index < sizeof(AllInfo)/sizeof(AllInfo[0]); index++) {
+        MechInfo info = AllInfo[index];
+        if (ensureAllDoMech(slots, num_slots, info.value) == PR_TRUE) {
+            fprintf(stdout, " - %s\n", info.name);
+        }
+    }
+}
+
 int doAESTests(PK11SlotInfo **slots, size_t num_slots, int iterations) {
     CK_MECHANISM_TYPE mechs[] = {
         CKM_AES_ECB,
@@ -134,10 +148,15 @@ int doAESTests(PK11SlotInfo **slots, size_t num_slots, int iterations) {
 
     for (size_t mech_index = 0; mech_index < sizeof(mechs)/sizeof(mechs[0]); mech_index++) {
         CK_MECHANISM_TYPE mech = mechs[mech_index];
+        if (PK11_DoesMechanism(slots[0], mech) == PR_FALSE) {
+            fprintf(stderr, "Skipping AES mechanism [%zu] %lx: not supported by default token.\n", mech_index, mech);
+            continue;
+        }
+
         for (int i = 0; i < iterations; i++) {
             test_ret_t ret = testAESOp(slots, num_slots, mech);
             if (ret != TEST_OK) {
-                fprintf(stderr, "[%d] Failed to do mechanism test: %lx - %d\n", i, mech, ret);
+                fprintf(stderr, "[%zu/%d] Failed to do AES mechanism test: %lx - %d\n", mech_index, i, mech, ret);
                 return 2;
             }
         }
@@ -158,13 +177,53 @@ int doHMACTests(PK11SlotInfo **slots, size_t num_slots, int iterations) {
 
     for (size_t mech_index = 0; mech_index < sizeof(mechs)/sizeof(mechs[0]); mech_index++) {
         CK_MECHANISM_TYPE mech = mechs[mech_index];
+        if (PK11_DoesMechanism(slots[0], mech) == PR_FALSE) {
+            fprintf(stderr, "Skipping HMAC mechanism [%zu] %lx: not supported by default token.\n", mech_index, mech);
+            continue;
+        }
+
         for (int i = 0; i < iterations; i++) {
             test_ret_t ret = testHMACOp(slots, num_slots, mech);
             if (ret != TEST_OK) {
-                fprintf(stderr, "[%d] Failed to do mechanism test: %lx - %d\n", i, mech, ret);
+                fprintf(stderr, "[%zu/%d] Failed to do HMAC mechanism test: %lx - %d\n", mech_index, i, mech, ret);
                 return 2;
             }
         }
+    }
+
+    return 0;
+}
+
+int doRSAEncTests(PK11SlotInfo **slots, size_t num_slots, int iterations) {
+    CK_MECHANISM_TYPE mechs[] = {
+        CKM_RSA_PKCS,
+        CKM_RSA_PKCS_OAEP,
+    };
+
+    for (size_t mech_index = 0; mech_index < sizeof(mechs)/sizeof(mechs[0]); mech_index++) {
+        CK_MECHANISM_TYPE mech = mechs[mech_index];
+        if (PK11_DoesMechanism(slots[0], mech) == PR_FALSE) {
+            fprintf(stderr, "Skipping RSA mechanism [%zu] %lx: not supported by default token.\n", mech_index, mech);
+            continue;
+        }
+
+        for (int i = 0; i < iterations; i++) {
+            test_ret_t ret = testRSAEncOp(slots, num_slots, mech);
+            if (ret != TEST_OK) {
+                fprintf(stderr, "[%zu/%d] Failed to do RSA mechanism test: %lx - %d\n", mech_index, i, mech, ret);
+                return 2;
+            }
+        }
+    }
+
+    return 0;
+}
+
+int doRSATests(PK11SlotInfo **slots, size_t num_slots, int iterations) {
+    int ret = doRSAEncTests(slots, num_slots, iterations);
+    if (ret != 0) {
+        fprintf(stderr, "Failed RSA encryption tests.\n");
+        return ret;
     }
 
     return 0;
@@ -180,6 +239,12 @@ int doTests(PK11SlotInfo **slots, size_t num_slots, int iterations) {
     ret = doHMACTests(slots, num_slots, iterations);
     if (ret != 0) {
         fprintf(stderr, "Failed HMAC tests.\n");
+        return ret;
+    }
+
+    ret = doRSATests(slots, num_slots, iterations);
+    if (ret != 0) {
+        fprintf(stderr, "Failed RSA tests.\n");
         return ret;
     }
 
@@ -250,6 +315,8 @@ int main(int argc, const char **argv) {
         listSlotInfo(slot);
         slots[slot_index] = slot;
     }
+
+    listAllSlotInfos(slots, num_slots);
 
     if (doTests(slots, num_slots, iterations) != 0) {
         fprintf(stderr, "Tests failed.\n");

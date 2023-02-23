@@ -5,6 +5,7 @@
 #include <secitem.h>
 #include <secmod.h>
 #include <keyhi.h>
+#include <keythi.h>
 #include <pk11func.h>
 #include <nspr.h>
 #include <pkcs11.h>
@@ -18,6 +19,7 @@
 #define MAX_OBJECT_ATTRS 15
 #define MAX_ATTEMPTS 10
 #define MAX_HMAC_OUTPUT_LEN 512
+#define MAX_RSA_OUTPUT_LEN 4096
 
 // secmodi.h from the NSS distribution.
 SECStatus PK11_CreateNewObject(PK11SlotInfo *slot, CK_SESSION_HANDLE session,
@@ -100,7 +102,7 @@ void reduceTemplate(CK_ATTRIBUTE *template, int *count) {
         }
     }
 
-    *count = offset+1;
+    *count = offset;
 }
 
 SECStatus establishSymKeyOnSlots(PK11SlotInfo **slots, size_t num_slots, CK_MECHANISM_TYPE mech, unsigned int bits, CK_FLAGS opFlags, PK11SymKey **keys) {
@@ -159,15 +161,45 @@ SECStatus establishSymKeyOnSlots(PK11SlotInfo **slots, size_t num_slots, CK_MECH
                 return SECFailure;
             }
 
-            int attrs = MAX_OBJECT_ATTRS;
-            reduceTemplate(template, &attrs);
-
             PRBool owner = PR_TRUE;
             PRBool *token = template[4].pValue;
             if (token == NULL) {
                 token = malloc(sizeof(PRBool));
                 *token = PR_FALSE;
             }
+
+            int attrs = MAX_OBJECT_ATTRS;
+            reduceTemplate(template, &attrs);
+
+            bool haveValue = false;
+            bool haveClass = false;
+            for (int i = 0; i < attrs; i++) {
+                if (template[attrs].type == CKA_VALUE) {
+                    haveValue = true;
+                }
+                if (template[attrs].type == CKA_CLASS) {
+                    haveClass = true;
+                }
+            }
+
+            // No value on key when read from KMIP.
+            if (!haveValue) {
+                char fakeKey[] = {0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x00};
+                template[attrs].type = CKA_VALUE;
+                template[attrs].pValue = (char *)fakeKey;
+                template[attrs].ulValueLen = 16;
+                attrs += 1;
+            }
+
+            // No CK_CLASS returned from KMIP.
+            if (!haveClass) {
+                CK_OBJECT_CLASS ckClass = CKO_SECRET_KEY;
+                template[attrs].type = CKA_CLASS;
+                template[attrs].pValue = &ckClass;
+                template[attrs].ulValueLen = sizeof(ckClass);
+                attrs += 1;
+            }
+
             CK_SESSION_HANDLE sess = pk11_GetNewSession(dest_slot, &owner);
             CK_OBJECT_HANDLE obj = CK_INVALID_HANDLE;
             SECStatus ret = PK11_CreateNewObject(dest_slot, sess, template, attrs, *token, &obj);
@@ -180,12 +212,9 @@ SECStatus establishSymKeyOnSlots(PK11SlotInfo **slots, size_t num_slots, CK_MECH
                 return SECFailure;
             }
 
-            for (int i = 0; i < MAX_OBJECT_ATTRS + 1; i++) {
-                PORT_Free(template[i].pValue);
-            }
             free(template);
 
-            dest_key = PK11_SymKeyFromHandle(dest_slot, NULL, PK11_OriginGenerated, mech, obj, PR_TRUE, NULL);
+            dest_key = PK11_SymKeyFromHandle(dest_slot, NULL, PK11_OriginGenerated, CKM_AES_ECB, obj, PR_TRUE, NULL);
             if (dest_key == NULL) {
                 PRErrorCode code = PORT_GetError();
                 const char *message = PORT_ErrorToString(code);
@@ -546,4 +575,125 @@ test_ret_t testHMACOp(PK11SlotInfo **slots, size_t num_slots, CK_MECHANISM_TYPE 
 
     fprintf(stderr, "Skipped all attempts at this mechanism; failing.\n");
     return TEST_ERROR;
+}
+
+SECStatus establishPrivKeyOnSlots(PK11SlotInfo **slots, size_t num_slots, CK_MECHANISM_TYPE mech, unsigned int bits, SECKEYPrivateKey **privs) {
+    for (size_t index = 0; index < num_slots; index++) {
+        PK11SlotInfo *slot = slots[index];
+        PK11RSAGenParams rsa = { bits, 65537 };
+        SECKEYPublicKey *pub = NULL;
+        SECKEYPrivateKey *priv = PK11_GenerateKeyPair(slot, mech, &rsa, &pub, PR_FALSE, PR_FALSE, NULL);
+        if (priv == NULL) {
+            PRErrorCode code = PORT_GetError();
+            const char *message = PORT_ErrorToString(code);
+            fprintf(stderr, "[%zu Slot %s / Token %s] Failed to generate key with mechanism %lx and %d bits: (%d) %s\n", index, PK11_GetSlotName(slot), PK11_GetTokenName(slot), mech, bits, code, message);
+            return SECFailure;
+        }
+        privs[index] = priv;
+    }
+
+    return SECSuccess;
+}
+
+test_ret_t doRSAPKCSEncOp(PK11SlotInfo **slots, SECKEYPrivateKey **privs, size_t num_slots, CK_MECHANISM_TYPE mech, SECItem *param, const unsigned char *data, unsigned int dataLen) {
+    // RSA is public/private key encryption/decryption. This means we need
+    // to port each public key to each other slot, do the encryption, and
+    // then do an encryption with the private key. We do this for every
+    // slot pair as each slot has its own private key, making this O(n^2).
+    // We need to also do it this way as public keys can be easily ported
+    // across module boundaries, but private keys cannot; plus, encryption
+    // and signatures use random entropy, so we can't simply dispatch the
+    // same op on different slots (with the same keys) and get the exact
+    // same answer for a memcmp(...) type test.
+    for (size_t slot_index = 0; slot_index < num_slots; slot_index++) {
+        PK11SlotInfo *slot = slots[slot_index];
+        SECKEYPrivateKey *priv = privs[slot_index];
+        for (size_t other_slot_index = 0; other_slot_index < num_slots; other_slot_index++) {
+            PK11SlotInfo *dest_slot = slots[other_slot_index];
+            SECKEYPublicKey *pub = SECKEY_ConvertToPublicKey(priv);
+            if (PK11_ImportPublicKey(dest_slot, pub, PR_FALSE) == CK_INVALID_HANDLE) {
+                PRErrorCode code = PORT_GetError();
+                const char *message = PORT_ErrorToString(code);
+                fprintf(stderr, "Unable to import private key from [%zu Slot %s / Token %s] to [%zu Slot %s / Token %s]: (%d) %s\n", slot_index, PK11_GetSlotName(slot), PK11_GetTokenName(slot), other_slot_index, PK11_GetSlotName(dest_slot), PK11_GetTokenName(dest_slot), code, message);
+                return TEST_ERROR;
+            }
+
+            unsigned int ciphertextLen = 0;
+            unsigned int maxLen = MAX_RSA_OUTPUT_LEN;
+            unsigned char *ciphertext = calloc(maxLen, sizeof(unsigned char));
+
+            if (PK11_PubEncrypt(pub, mech, param, ciphertext, &ciphertextLen, maxLen, data, dataLen, NULL) == SECFailure) {
+                PRErrorCode code = PORT_GetError();
+                const char *message = PORT_ErrorToString(code);
+                fprintf(stderr, "With Private Key from [%zu Slot %s / Token %s] and public key on [%zu Slot %s / Token %s]: failed encrypting data with mechanism %lx: (%d) %s\n", slot_index, PK11_GetSlotName(slot), PK11_GetTokenName(slot), other_slot_index, PK11_GetSlotName(dest_slot), PK11_GetTokenName(dest_slot), mech, code, message);
+                return TEST_ERROR;
+            }
+
+            if (ciphertextLen == dataLen && memcmp(data, ciphertext, dataLen) == 0) {
+                fprintf(stderr, "With Private Key from [%zu Slot %s / Token %s] and public key on [%zu Slot %s / Token %s]: failed encrypting data with mechanism %lx: got same ciphertext as plaintext!\n", slot_index, PK11_GetSlotName(slot), PK11_GetTokenName(slot), other_slot_index, PK11_GetSlotName(dest_slot), PK11_GetTokenName(dest_slot), mech);
+                return TEST_ERROR;
+            }
+
+            unsigned int plaintextLen = 0;
+            unsigned char *plaintext = calloc(maxLen, sizeof(unsigned char));
+            if (PK11_PrivDecrypt(priv, mech, param, plaintext, &plaintextLen, maxLen, ciphertext, ciphertextLen) == SECFailure) {
+                PRErrorCode code = PORT_GetError();
+                const char *message = PORT_ErrorToString(code);
+                fprintf(stderr, "With Private Key from [%zu Slot %s / Token %s] and public key on [%zu Slot %s / Token %s]: failed decrypting data with mechanism %lx: (%d) %s\n", slot_index, PK11_GetSlotName(slot), PK11_GetTokenName(slot), other_slot_index, PK11_GetSlotName(dest_slot), PK11_GetTokenName(dest_slot), mech, code, message);
+                return TEST_ERROR;
+            }
+
+            if (plaintextLen != dataLen || memcmp(data, plaintext, dataLen) != 0) {
+                fprintf(stderr, "With Private Key from [%zu Slot %s / Token %s] and public key on [%zu Slot %s / Token %s]: failed decrypting data with mechanism %lx: expecting round-trip test to work; got different plaintext and original data: plaintextLen %d vs dataLen: %d\n\tplaintext: %s\n\tdata: %s\n\t", slot_index, PK11_GetSlotName(slot), PK11_GetTokenName(slot), other_slot_index, PK11_GetSlotName(dest_slot), PK11_GetTokenName(dest_slot), mech, plaintextLen, dataLen, plaintext, data);
+                return TEST_ERROR;
+            }
+        }
+    }
+
+    return TEST_OK;
+}
+
+test_ret_t testRSAEncOp(PK11SlotInfo **slots, size_t num_slots, CK_MECHANISM_TYPE mech) {
+    unsigned int bits = 2048;
+    SECKEYPrivateKey **privs = calloc(num_slots, sizeof(SECKEYPrivateKey *));
+    if (establishPrivKeyOnSlots(slots, num_slots, CKM_RSA_PKCS_KEY_PAIR_GEN, bits, privs) == SECFailure) {
+        fprintf(stderr, "Failed to generate fresh RSA keys on slots.\n");
+        return TEST_ERROR;
+    }
+
+    for (int attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+        unsigned int dataLen = 0;
+        unsigned int upperBound = bits/8/4;
+
+        if (nextUint(&dataLen, 1, upperBound) == SECFailure) {
+            fprintf(stderr, "Error reading data length in range [%u, %u).\n", 1, upperBound);
+            return TEST_ERROR;
+        }
+
+        unsigned char *data = calloc(dataLen + 1, sizeof(unsigned char));
+        if (PK11_GenerateRandom(data, dataLen) != SECSuccess) {
+        fprintf(stderr, "Error reading data of length %u.\n", dataLen);
+            return TEST_ERROR;
+        }
+
+        test_ret_t ret;
+        switch (mech) {
+        case CKM_RSA_PKCS:
+            ret = doRSAPKCSEncOp(slots, privs, num_slots, mech, NULL, data, dataLen);
+            break;
+        default:
+            fprintf(stderr, "Unknown mechanism to testRSAEncOp: %lx\n", mech);
+            ret = TEST_ERROR;
+        }
+        free(data);
+
+        if (ret == TEST_SKIP) {
+            fprintf(stderr, "Skipping mechanism this time due to incorrect parameters...\n");
+            continue;
+        }
+
+        return ret;
+    }
+
+    return TEST_OK;
 }
