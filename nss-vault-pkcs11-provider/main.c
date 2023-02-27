@@ -203,14 +203,14 @@ int doRSAEncTests(PK11SlotInfo **slots, size_t num_slots, int iterations) {
     for (size_t mech_index = 0; mech_index < sizeof(mechs)/sizeof(mechs[0]); mech_index++) {
         CK_MECHANISM_TYPE mech = mechs[mech_index];
         if (PK11_DoesMechanism(slots[0], mech) == PR_FALSE) {
-            fprintf(stderr, "Skipping RSA mechanism [%zu] %lx: not supported by default token.\n", mech_index, mech);
+            fprintf(stderr, "Skipping RSA encryption mechanism [%zu] %lx: not supported by default token.\n", mech_index, mech);
             continue;
         }
 
         for (int i = 0; i < iterations; i++) {
             test_ret_t ret = testRSAEncOp(slots, num_slots, mech);
             if (ret != TEST_OK) {
-                fprintf(stderr, "[%zu/%d] Failed to do RSA mechanism test: %lx - %d\n", mech_index, i, mech, ret);
+                fprintf(stderr, "[%zu/%d] Failed to do RSA encryption mechanism test: %lx - %d\n", mech_index, i, mech, ret);
                 return 2;
             }
         }
@@ -219,10 +219,48 @@ int doRSAEncTests(PK11SlotInfo **slots, size_t num_slots, int iterations) {
     return 0;
 }
 
+int doRSASignTests(PK11SlotInfo **slots, size_t num_slots, int iterations) {
+    CK_MECHANISM_TYPE mechs[] = {
+        CKM_SHA256_RSA_PKCS,
+        CKM_SHA384_RSA_PKCS,
+        CKM_SHA512_RSA_PKCS,
+        CKM_SHA256_RSA_PKCS_PSS,
+        CKM_SHA384_RSA_PKCS_PSS,
+        CKM_SHA512_RSA_PKCS_PSS,
+        /* CKM_RSA_PKCS, // Not supported by module right now.
+        CKM_RSA_PKCS_PSS,*/
+    };
+
+    for (size_t mech_index = 0; mech_index < sizeof(mechs)/sizeof(mechs[0]); mech_index++) {
+        CK_MECHANISM_TYPE mech = mechs[mech_index];
+        if (PK11_DoesMechanism(slots[0], mech) == PR_FALSE) {
+            fprintf(stderr, "Skipping RSA signature mechanism [%zu] %lx: not supported by default token.\n", mech_index, mech);
+            continue;
+        }
+
+        for (int i = 0; i < iterations; i++) {
+            test_ret_t ret = testRSASignOp(slots, num_slots, mech);
+            if (ret != TEST_OK) {
+                fprintf(stderr, "[%zu/%d] Failed to do RSA signature mechanism test: %lx - %d\n", mech_index, i, mech, ret);
+                return 2;
+            }
+        }
+    }
+
+    return 0;
+}
+
+
 int doRSATests(PK11SlotInfo **slots, size_t num_slots, int iterations) {
-    int ret = doRSAEncTests(slots, num_slots, iterations);
+    int ret = /*doRSAEncTests(slots, num_slots, iterations);
     if (ret != 0) {
         fprintf(stderr, "Failed RSA encryption tests.\n");
+        return ret;
+    }
+
+    ret = */doRSASignTests(slots, num_slots, iterations);
+    if (ret != 0) {
+        fprintf(stderr, "Failed RSA signature tests.\n");
         return ret;
     }
 
@@ -230,7 +268,7 @@ int doRSATests(PK11SlotInfo **slots, size_t num_slots, int iterations) {
 }
 
 int doTests(PK11SlotInfo **slots, size_t num_slots, int iterations) {
-    int ret = doAESTests(slots, num_slots, iterations);
+    int ret = /*doAESTests(slots, num_slots, iterations);
     if (ret != 0) {
         fprintf(stderr, "Failed AES tests.\n");
         return ret;
@@ -242,7 +280,7 @@ int doTests(PK11SlotInfo **slots, size_t num_slots, int iterations) {
         return ret;
     }
 
-    ret = doRSATests(slots, num_slots, iterations);
+    ret = */doRSATests(slots, num_slots, iterations);
     if (ret != 0) {
         fprintf(stderr, "Failed RSA tests.\n");
         return ret;

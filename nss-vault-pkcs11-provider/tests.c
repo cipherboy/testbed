@@ -19,7 +19,7 @@
 #define MAX_OBJECT_ATTRS 15
 #define MAX_ATTEMPTS 10
 #define MAX_HMAC_OUTPUT_LEN 512
-#define MAX_RSA_OUTPUT_LEN 4096
+#define MAX_RSA_OUTPUT_LEN 8192
 
 // secmodi.h from the NSS distribution.
 SECStatus PK11_CreateNewObject(PK11SlotInfo *slot, CK_SESSION_HANDLE session,
@@ -595,7 +595,7 @@ SECStatus establishPrivKeyOnSlots(PK11SlotInfo **slots, size_t num_slots, CK_MEC
     return SECSuccess;
 }
 
-test_ret_t doRSAPKCSEncOp(PK11SlotInfo **slots, SECKEYPrivateKey **privs, size_t num_slots, CK_MECHANISM_TYPE mech, SECItem *param, const unsigned char *data, unsigned int dataLen) {
+test_ret_t doRSAEncOp(PK11SlotInfo **slots, SECKEYPrivateKey **privs, size_t num_slots, CK_MECHANISM_TYPE mech, SECItem *param, const unsigned char *data, unsigned int dataLen) {
     // RSA is public/private key encryption/decryption. This means we need
     // to port each public key to each other slot, do the encryption, and
     // then do an encryption with the private key. We do this for every
@@ -615,6 +615,11 @@ test_ret_t doRSAPKCSEncOp(PK11SlotInfo **slots, SECKEYPrivateKey **privs, size_t
                 PRErrorCode code = PORT_GetError();
                 const char *message = PORT_ErrorToString(code);
                 fprintf(stderr, "Unable to import private key from [%zu Slot %s / Token %s] to [%zu Slot %s / Token %s]: (%d) %s\n", slot_index, PK11_GetSlotName(slot), PK11_GetTokenName(slot), other_slot_index, PK11_GetSlotName(dest_slot), PK11_GetTokenName(dest_slot), code, message);
+                return TEST_ERROR;
+            }
+
+            if (pub->pkcs11Slot != dest_slot) {
+                fprintf(stderr, "Failed to import private key's public counterpart from [%zu Slot %s / Token %s] to [%zu Slot %s / Token %s]: was actually on [Slot %s / Token %s]\n", slot_index, PK11_GetSlotName(slot), PK11_GetTokenName(slot), other_slot_index, PK11_GetSlotName(dest_slot), PK11_GetTokenName(dest_slot), PK11_GetSlotName(pub->pkcs11Slot), PK11_GetTokenName(pub->pkcs11Slot));
                 return TEST_ERROR;
             }
 
@@ -722,16 +727,203 @@ test_ret_t testRSAEncOp(PK11SlotInfo **slots, size_t num_slots, CK_MECHANISM_TYP
         test_ret_t ret;
         switch (mech) {
         case CKM_RSA_PKCS:
-            ret = doRSAPKCSEncOp(slots, privs, num_slots, mech, NULL, data, dataLen);
+            ret = doRSAEncOp(slots, privs, num_slots, mech, NULL, data, dataLen);
             break;
         case CKM_RSA_PKCS_OAEP:
-            ret = doRSAPKCSEncOp(slots, privs, num_slots, mech, &oaepParams, data, dataLen);
+            ret = doRSAEncOp(slots, privs, num_slots, mech, &oaepParams, data, dataLen);
             if (ret != TEST_OK) {
                 fprintf(stderr, "OAEP hashAlg: %lu / mgf: %lu\n", hashAlg, mgf);
             }
             break;
         default:
             fprintf(stderr, "Unknown mechanism to testRSAEncOp: %lx\n", mech);
+            ret = TEST_ERROR;
+        }
+        free(data);
+
+        if (ret == TEST_SKIP) {
+            fprintf(stderr, "Skipping mechanism this time due to incorrect parameters...\n");
+            continue;
+        }
+
+        return ret;
+    }
+
+    return TEST_OK;
+}
+
+test_ret_t doRSASignOp(PK11SlotInfo **slots, SECKEYPrivateKey **privs, size_t num_slots, CK_MECHANISM_TYPE mech, SECItem *param, unsigned char *data, unsigned int dataLen) {
+    // See note in doRSAEncOp.
+    for (size_t slot_index = 0; slot_index < num_slots; slot_index++) {
+        PK11SlotInfo *slot = slots[slot_index];
+        SECKEYPrivateKey *priv = privs[slot_index];
+        for (size_t other_slot_index = 0; other_slot_index < num_slots; other_slot_index++) {
+            PK11SlotInfo *dest_slot = slots[other_slot_index];
+            SECKEYPublicKey *pub = SECKEY_ConvertToPublicKey(priv);
+            if (PK11_ImportPublicKey(dest_slot, pub, PR_FALSE) == CK_INVALID_HANDLE) {
+                PRErrorCode code = PORT_GetError();
+                const char *message = PORT_ErrorToString(code);
+                fprintf(stderr, "Unable to import private key from [%zu Slot %s / Token %s] to [%zu Slot %s / Token %s]: (%d) %s\n", slot_index, PK11_GetSlotName(slot), PK11_GetTokenName(slot), other_slot_index, PK11_GetSlotName(dest_slot), PK11_GetTokenName(dest_slot), code, message);
+                return TEST_ERROR;
+            }
+
+            if (pub->pkcs11Slot != dest_slot) {
+                fprintf(stderr, "Failed to import private key's public counterpart from [%zu Slot %s / Token %s] to [%zu Slot %s / Token %s]: was actually on [Slot %s / Token %s]\n", slot_index, PK11_GetSlotName(slot), PK11_GetTokenName(slot), other_slot_index, PK11_GetSlotName(dest_slot), PK11_GetTokenName(dest_slot), PK11_GetSlotName(pub->pkcs11Slot), PK11_GetTokenName(pub->pkcs11Slot));
+                return TEST_ERROR;
+            }
+
+            unsigned int sigLen = 0;
+            unsigned int maxLen = MAX_RSA_OUTPUT_LEN;
+            unsigned char *sig = calloc(maxLen, sizeof(unsigned char));
+            SECItem sigParam = {siBuffer, sig, maxLen};
+            SECItem hashParam = {siBuffer, data, dataLen};
+
+            if (PK11_SignWithMechanism(priv, mech, param, &sigParam, &hashParam) == SECFailure) {
+                PRErrorCode code = PORT_GetError();
+                const char *message = PORT_ErrorToString(code);
+                fprintf(stderr, "With Private Key from [%zu Slot %s / Token %s] and public key on [%zu Slot %s / Token %s]: failed signing data with mechanism %lx: (%d) %s\n", slot_index, PK11_GetSlotName(slot), PK11_GetTokenName(slot), other_slot_index, PK11_GetSlotName(dest_slot), PK11_GetTokenName(dest_slot), mech, code, message);
+                return TEST_ERROR;
+            }
+
+            sigLen = sigParam.len;
+
+            if (sigLen == dataLen && memcmp(data, sig, dataLen) == 0) {
+                fprintf(stderr, "With Private Key from [%zu Slot %s / Token %s] and public key on [%zu Slot %s / Token %s]: failed signing data with mechanism %lx: got same signature as plaintext!\n", slot_index, PK11_GetSlotName(slot), PK11_GetTokenName(slot), other_slot_index, PK11_GetSlotName(dest_slot), PK11_GetTokenName(dest_slot), mech);
+                return TEST_ERROR;
+            }
+
+            if (PK11_VerifyWithMechanism(pub, mech, param, &sigParam, &hashParam, NULL) == SECFailure) {
+                PRErrorCode code = PORT_GetError();
+                const char *message = PORT_ErrorToString(code);
+                fprintf(stderr, "With Private Key from [%zu Slot %s / Token %s] and public key on [%zu Slot %s / Token %s]: failed verifying data with mechanism %lx: (%d) %s\n", slot_index, PK11_GetSlotName(slot), PK11_GetTokenName(slot), other_slot_index, PK11_GetSlotName(dest_slot), PK11_GetTokenName(dest_slot), mech, code, message);
+                return TEST_ERROR;
+            }
+        }
+    }
+
+    return TEST_OK;
+}
+
+test_ret_t testRSASignOp(PK11SlotInfo **slots, size_t num_slots, CK_MECHANISM_TYPE mech) {
+    unsigned int bits = 2048;
+    SECKEYPrivateKey **privs = calloc(num_slots, sizeof(SECKEYPrivateKey *));
+    if (establishPrivKeyOnSlots(slots, num_slots, CKM_RSA_PKCS_KEY_PAIR_GEN, bits, privs) == SECFailure) {
+        fprintf(stderr, "Failed to generate fresh RSA keys on slots.\n");
+        return TEST_ERROR;
+    }
+
+    for (int attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+        uint32_t choice;
+        CK_MECHANISM_TYPE hashAlgs[] = {CKM_SHA256, CKM_SHA384, CKM_SHA512};
+        CK_MECHANISM_TYPE hashAlg;
+
+        switch (mech) {
+        case CKM_SHA256_RSA_PKCS:
+        case CKM_SHA256_RSA_PKCS_PSS:
+            choice = 0;
+            break;
+        case CKM_SHA384_RSA_PKCS:
+        case CKM_SHA384_RSA_PKCS_PSS:
+            choice = 1;
+            break;
+        case CKM_SHA512_RSA_PKCS:
+        case CKM_SHA512_RSA_PKCS_PSS:
+            choice = 2;
+            break;
+        default:
+            if (nextUint(&choice, 0, sizeof(hashAlgs)/sizeof(hashAlgs[0])) == SECFailure) {
+                fprintf(stderr, "Error reading hash algorithm in range [%u, %lu).\n", 0, sizeof(hashAlgs)/sizeof(hashAlgs[0]));
+                return TEST_ERROR;
+            }
+            break;
+        }
+
+        hashAlg = hashAlgs[choice];
+
+        // MUST BE IN SAME ORDER AS hashAlgs above!
+        CK_RSA_PKCS_MGF_TYPE mgfs[] = {
+            /* CKG_MGF1_SHA1,*/
+            CKG_MGF1_SHA256,
+            CKG_MGF1_SHA384,
+            CKG_MGF1_SHA512,
+            /*CKG_MGF1_SHA224,
+            CKG_MGF1_SHA3_224,
+            CKG_MGF1_SHA3_256,
+            CKG_MGF1_SHA3_384,
+            CKG_MGF1_SHA3_512*/
+        };
+        /* Require MGF == hashAlg due to Go requirements. */
+        CK_RSA_PKCS_MGF_TYPE mgf = mgfs[choice];
+
+        // MUST BE IN SAME ORDER AS hashAlgs above!
+        unsigned int hashLengths[] = {
+            256/8,
+            384/8,
+            512/8,
+        };
+        unsigned int hashedLen = 0;
+        unsigned int dataLen = 0;
+
+        switch (mech) {
+        case CKM_RSA_PKCS:
+        case CKM_RSA_PKCS_PSS:
+            dataLen = hashLengths[choice];
+            hashedLen = dataLen;
+            break;
+        default:
+            hashedLen = hashLengths[choice];
+            if (nextUint(&dataLen, 0, MAX_RSA_OUTPUT_LEN) == SECFailure) {
+                fprintf(stderr, "Error reading hash algorithm in range [%u, %u).\n", 0, MAX_RSA_OUTPUT_LEN);
+                return TEST_ERROR;
+            }
+        }
+
+        // PKCS#11 expects "data" here to be a pre-hashed value to sign. We
+        // just generate a random value and assume data != hash(data), which
+        // should be safe for any cryptographic hash function. In particular,
+        // this lets us differentiate between bad sig mechanisms, where it
+        // sig(data) := sig(hash(data)), whereas PKCS#11 says the token should
+        // elide that hash (and treat data as if it was the output of a hash).
+        unsigned char *data = calloc(dataLen + 1, sizeof(unsigned char));
+        if (PK11_GenerateRandom(data, dataLen) != SECSuccess) {
+        fprintf(stderr, "Error reading data of length %u.\n", dataLen);
+            return TEST_ERROR;
+        }
+
+        uint32_t saltLengthLower = 0;
+        uint32_t saltLengthUpper = ((bits-1)/8) - hashedLen - 2; // Inclusive upper bound on RNG.
+        uint32_t saltLength = 0;
+        if (nextUint(&saltLength, saltLengthLower, saltLengthUpper + 1 /* exclusive */) == SECFailure) {
+            fprintf(stderr, "Error reading signature bits in range [%u, %u).\n", saltLengthLower, saltLengthUpper+1);
+            return TEST_ERROR;
+        }
+
+        CK_RSA_PKCS_PSS_PARAMS pss = {
+            hashAlg,
+            mgf,
+            (CK_ULONG) saltLength,
+        };
+        SECItem pssParams = {siBuffer, (unsigned char *)&pss, sizeof(pss)};
+
+        test_ret_t ret;
+        switch (mech) {
+        case CKM_RSA_PKCS:
+        case CKM_SHA256_RSA_PKCS:
+        case CKM_SHA384_RSA_PKCS:
+        case CKM_SHA512_RSA_PKCS:
+            ret = doRSASignOp(slots, privs, num_slots, mech, NULL, data, dataLen);
+            break;
+        case CKM_RSA_PKCS_PSS:
+        case CKM_SHA256_RSA_PKCS_PSS:
+        case CKM_SHA384_RSA_PKCS_PSS:
+        case CKM_SHA512_RSA_PKCS_PSS:
+            ret = doRSASignOp(slots, privs, num_slots, mech, &pssParams, data, dataLen);
+            if (ret != TEST_OK) {
+                fprintf(stderr, "PSS hashAlg: %lu / mgf: %lu / salt length: %u\n", hashAlg, mgf, saltLength);
+            }
+            break;
+        default:
+            fprintf(stderr, "Unknown mechanism to testRSASignOp: %lx\n", mech);
             ret = TEST_ERROR;
         }
         free(data);

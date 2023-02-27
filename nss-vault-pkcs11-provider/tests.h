@@ -29,3 +29,4 @@ SECStatus establishSymKeyOnSlots(PK11SlotInfo **slots, size_t num_slots, CK_MECH
 test_ret_t testAESOp(PK11SlotInfo **slots, size_t num_slots, CK_MECHANISM_TYPE mech);
 test_ret_t testHMACOp(PK11SlotInfo **slots, size_t num_slots, CK_MECHANISM_TYPE mech);
 test_ret_t testRSAEncOp(PK11SlotInfo **slots, size_t num_slots, CK_MECHANISM_TYPE mech);
+test_ret_t testRSASignOp(PK11SlotInfo **slots, size_t num_slots, CK_MECHANISM_TYPE mech);
