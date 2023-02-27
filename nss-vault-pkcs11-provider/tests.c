@@ -687,8 +687,9 @@ test_ret_t testRSAEncOp(PK11SlotInfo **slots, size_t num_slots, CK_MECHANISM_TYP
 
         hashAlg = hashAlgs[choice];
 
+        // MUST BE IN SAME ORDER AS hashAlgs above!
         CK_RSA_PKCS_MGF_TYPE mgfs[] = {
-            CKG_MGF1_SHA1,
+            /* CKG_MGF1_SHA1,*/
             CKG_MGF1_SHA256,
             CKG_MGF1_SHA384,
             CKG_MGF1_SHA512,
@@ -698,14 +699,16 @@ test_ret_t testRSAEncOp(PK11SlotInfo **slots, size_t num_slots, CK_MECHANISM_TYP
             CKG_MGF1_SHA3_384,
             CKG_MGF1_SHA3_512*/
         };
-        CK_RSA_PKCS_MGF_TYPE mgf;
+        /* Require MGF == hashAlg due to Go requirements. */
+        CK_RSA_PKCS_MGF_TYPE mgf = mgfs[choice];
 
-        if (nextUint(&choice, 0, sizeof(mgfs)/sizeof(mgfs[0])) == SECFailure) {
+
+        /*if (nextUint(&choice, 0, sizeof(mgfs)/sizeof(mgfs[0])) == SECFailure) {
             fprintf(stderr, "Error reading MGF in range [%u, %lu).\n", 0, sizeof(mgfs)/sizeof(mgfs[0]));
             return TEST_ERROR;
         }
 
-        mgf = mgfs[choice];
+        mgf = mgfs[choice];*/
 
         CK_RSA_PKCS_OAEP_PARAMS oaep = {
             hashAlg,
