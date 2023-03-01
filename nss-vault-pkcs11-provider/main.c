@@ -275,7 +275,7 @@ int doTests(PK11SlotInfo **slots, size_t num_slots, int iterations) {
         return ret;
     }
 
-    /*ret = doHMACTests(slots, num_slots, iterations);
+    ret = doHMACTests(slots, num_slots, iterations);
     if (ret != 0) {
         fprintf(stderr, "Failed HMAC tests.\n");
         return ret;
@@ -285,7 +285,7 @@ int doTests(PK11SlotInfo **slots, size_t num_slots, int iterations) {
     if (ret != 0) {
         fprintf(stderr, "Failed RSA tests.\n");
         return ret;
-    }*/
+    }
 
     return 0;
 }
