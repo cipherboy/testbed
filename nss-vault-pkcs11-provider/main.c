@@ -82,7 +82,8 @@ void parseMainArgs(int argc, const char **argv, int *offset, const char **databa
     }
 }
 
-char *staticPassFunc(PK11SlotInfo *, PRBool retry, void *arg) {
+char *staticPassFunc(PK11SlotInfo *slot, PRBool retry, void *arg) {
+    fprintf(stdout, "[Slot: %s / Token: %s] Providing password...\n", PK11_GetSlotName(slot), PK11_GetTokenName(slot));
     if (retry == PR_TRUE) {
         fprintf(stderr, "Password was invalid; asked to retry.\n");
         return NULL;
@@ -299,8 +300,8 @@ int main(int argc, const char **argv) {
     char *slot_names[] = { default_slot_name, NULL, NULL, NULL, NULL, NULL, NULL, NULL };
     char *passwords[] = { default_password, NULL, NULL, NULL, NULL, NULL, NULL, NULL };
 
-    static_assert(sizeof(slot_names)/sizeof(slot_names[0]) == max_num_slots);
-    static_assert(sizeof(passwords)/sizeof(passwords[0]) == max_num_slots);
+    assert(sizeof(slot_names)/sizeof(slot_names[0]) == max_num_slots);
+    assert(sizeof(passwords)/sizeof(passwords[0]) == max_num_slots);
 
     int iterations = 1;
     int offset = 1;
@@ -326,6 +327,7 @@ int main(int argc, const char **argv) {
     }
 
     PK11SlotInfo *slots[] = {NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL};
+    assert(sizeof(slots)/sizeof(slots[0]) == max_num_slots);
     for (size_t slot_index = 0; slot_index < max_num_slots && slot_index < num_slots; slot_index++) {
         char *slot_name = slot_names[slot_index];
         char *password = passwords[slot_index];
