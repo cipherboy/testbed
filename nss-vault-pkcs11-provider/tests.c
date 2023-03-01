@@ -290,6 +290,8 @@ test_ret_t doAESOp(PK11SlotInfo **slots, PK11SymKey **keys, size_t num_slots, CK
             unsigned char *other = ciphertexts[other_index];
 
             if (otherLen != baseLen || memcmp(base, other, baseLen) != 0) {
+                fprintf(stderr, "[base: %zu Slot %s / Token %s] vs [other: %zu Slot %s / Token %s] due to different ciphertexts, doing pairwise decryption tests.\n", base_index, PK11_GetSlotName(base_slot), PK11_GetTokenName(base_slot), other_index, PK11_GetSlotName(other_slot), PK11_GetTokenName(other_slot));
+
                 bool haveError = false;
                 /* Do a mutual decryption test before saying we're invalid. */
                 unsigned int basePlaintextLen = 0;
@@ -310,29 +312,38 @@ test_ret_t doAESOp(PK11SlotInfo **slots, PK11SymKey **keys, size_t num_slots, CK
                     haveError = true;
                 }
 
-                if (haveError || otherPlaintextLen != basePlaintextLen || memcmp(basePlaintext, otherPlaintext, basePlaintextLen) != 0) {
+                if (otherPlaintextLen != basePlaintextLen || memcmp(basePlaintext, otherPlaintext, basePlaintextLen) != 0) {
                     fprintf(stderr, "[base: %zu Slot %s / Token %s] vs [other: %zu Slot %s / Token %s] Comparison test failed: different ciphertexts resulted in different pairwise plaintexts:\n", base_index, PK11_GetSlotName(base_slot), PK11_GetTokenName(base_slot), other_index, PK11_GetSlotName(other_slot), PK11_GetTokenName(other_slot));
-                    fprintf(stderr, "== DATA ==\n");
-                    fprintf(stderr, "\tdata ");
-                    printHex(stderr, data, dataLen);
-                    fprintf(stderr, "\n");
-
-                    fprintf(stderr, "== BASE ==\n");
-                    fprintf(stderr, "\tciphertext ");
-                    printHex(stderr, base, baseLen);
-                    fprintf(stderr, "\tpairwise plaintext ");
-                    printHex(stderr, basePlaintext, basePlaintextLen);
-                    fprintf(stderr, "\n");
-
-                    fprintf(stderr, "== OTHER ==\n");
-                    fprintf(stderr, "\tciphertext ");
-                    printHex(stderr, other, otherLen);
-                    fprintf(stderr, "\tpairwise plaintext ");
-                    printHex(stderr, otherPlaintext, otherPlaintextLen);
-                    fprintf(stderr, "\n");
+                    haveError = true;
                 }
 
-                return TEST_ERROR;
+                if (!haveError && (basePlaintextLen != dataLen || memcmp(data, basePlaintext, dataLen) != 0)) {
+                    fprintf(stderr, "[base: %zu Slot %s / Token %s] vs [other: %zu Slot %s / Token %s] Comparison test failed: different ciphertexts resulted in matching pairwise plaintexts which are different from the original data!\n", base_index, PK11_GetSlotName(base_slot), PK11_GetTokenName(base_slot), other_index, PK11_GetSlotName(other_slot), PK11_GetTokenName(other_slot));
+                    haveError = true;
+                }
+
+                fprintf(stderr, "== DATA ==\n");
+                fprintf(stderr, "\tdata ");
+                printHex(stderr, data, dataLen);
+                fprintf(stderr, "\n");
+
+                fprintf(stderr, "== BASE ==\n");
+                fprintf(stderr, "\tciphertext ");
+                printHex(stderr, base, baseLen);
+                fprintf(stderr, "\tpairwise plaintext ");
+                printHex(stderr, basePlaintext, basePlaintextLen);
+                fprintf(stderr, "\n");
+
+                fprintf(stderr, "== OTHER ==\n");
+                fprintf(stderr, "\tciphertext ");
+                printHex(stderr, other, otherLen);
+                fprintf(stderr, "\tpairwise plaintext ");
+                printHex(stderr, otherPlaintext, otherPlaintextLen);
+                fprintf(stderr, "\n");
+
+                if (haveError) {
+                    return TEST_ERROR;
+                }
             }
         }
     }
@@ -488,15 +499,24 @@ test_ret_t testAESOp(PK11SlotInfo **slots, size_t num_slots, CK_MECHANISM_TYPE m
 
         unsigned int ctrLen = 0;
         unsigned int ctrMin = 1;
-        if (dataLen > 4000) {
+        if (dataLen > 2048) {
             ctrMin = 2;
+        } else if (dataLen > 4096) {
+            ctrMin = 3;
         }
         if (nextUint(&ctrLen, ctrMin, 8) == SECFailure) {
             return TEST_ERROR;
         }
+        if (mech == CKM_AES_CTR) {
+            // Clear out the counter's bits in the IV. This leads to undefined
+            // behavior on the PKCS#11 spec and incompatibilities otherwise,
+            // though Go seems to allow it.
+            memset(iv+ivLen-ctrLen, 0, ctrLen);
+        }
         ctrLen *= 8; // Bits, not bytes.
 
-        fprintf(stderr, "Dispatching mechanism %lu: dataLen=%u, ivLen=%u, aadLen=%u, ctrLen=%u\n", mech, dataLen, ivLen, aadLen, ctrLen);
+        fprintf(stderr, "Dispatching mechanism %lu: dataLen=%u, ivLen=%u, aadLen=%u, ctrLen=%u, iv=", mech, dataLen, ivLen, aadLen, ctrLen);
+        printHex(stderr, iv, ivLen);
 
         test_ret_t ret;
         switch (mech) {
