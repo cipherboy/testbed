@@ -221,14 +221,14 @@ int doRSAEncTests(PK11SlotInfo **slots, size_t num_slots, int iterations) {
 
 int doRSASignTests(PK11SlotInfo **slots, size_t num_slots, int iterations) {
     CK_MECHANISM_TYPE mechs[] = {
+        CKM_RSA_PKCS,
         CKM_SHA256_RSA_PKCS,
         CKM_SHA384_RSA_PKCS,
         CKM_SHA512_RSA_PKCS,
         CKM_SHA256_RSA_PKCS_PSS,
         CKM_SHA384_RSA_PKCS_PSS,
         CKM_SHA512_RSA_PKCS_PSS,
-        /* CKM_RSA_PKCS, // Not supported by module right now.
-        CKM_RSA_PKCS_PSS,*/
+        /*CKM_RSA_PKCS_PSS,*/
     };
 
     for (size_t mech_index = 0; mech_index < sizeof(mechs)/sizeof(mechs[0]); mech_index++) {
@@ -252,13 +252,13 @@ int doRSASignTests(PK11SlotInfo **slots, size_t num_slots, int iterations) {
 
 
 int doRSATests(PK11SlotInfo **slots, size_t num_slots, int iterations) {
-    int ret = /*doRSAEncTests(slots, num_slots, iterations);
+    int ret = doRSAEncTests(slots, num_slots, iterations);
     if (ret != 0) {
         fprintf(stderr, "Failed RSA encryption tests.\n");
         return ret;
     }
 
-    ret = */doRSASignTests(slots, num_slots, iterations);
+    ret = doRSASignTests(slots, num_slots, iterations);
     if (ret != 0) {
         fprintf(stderr, "Failed RSA signature tests.\n");
         return ret;
@@ -268,7 +268,7 @@ int doRSATests(PK11SlotInfo **slots, size_t num_slots, int iterations) {
 }
 
 int doTests(PK11SlotInfo **slots, size_t num_slots, int iterations) {
-    int ret = /*doAESTests(slots, num_slots, iterations);
+    int ret = doAESTests(slots, num_slots, iterations);
     if (ret != 0) {
         fprintf(stderr, "Failed AES tests.\n");
         return ret;
@@ -280,7 +280,7 @@ int doTests(PK11SlotInfo **slots, size_t num_slots, int iterations) {
         return ret;
     }
 
-    ret = */doRSATests(slots, num_slots, iterations);
+    ret = doRSATests(slots, num_slots, iterations);
     if (ret != 0) {
         fprintf(stderr, "Failed RSA tests.\n");
         return ret;

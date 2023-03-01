@@ -541,9 +541,42 @@ test_ret_t doHMACOp(PK11SlotInfo **slots, PK11SymKey **keys, size_t num_slots, C
 }
 
 test_ret_t testHMACOp(PK11SlotInfo **slots, size_t num_slots, CK_MECHANISM_TYPE mech) {
+    /* SoftHSM requires keys to be pre-hashed, if they are too long. */
+    /* This appears to violate the PKCS#11 spec. */
+    unsigned int keyLen = 16;
+    CK_MECHANISM_TYPE keyGenType = CKM_SHA256_KEY_GEN;
+    switch (mech) {
+    case CKM_SHA224_HMAC:
+    case CKM_SHA512_224_HMAC:
+        keyLen = 224/8;
+        keyGenType = CKM_SHA224_KEY_GEN;
+        break;
+    case CKM_SHA256_HMAC:
+    case CKM_SHA512_256_HMAC:
+        keyLen = 256/8;
+        keyGenType = CKM_SHA256_KEY_GEN;
+        break;
+    case CKM_SHA384_HMAC:
+        keyLen = 384/8;
+        keyGenType = CKM_SHA384_KEY_GEN;
+        break;
+    case CKM_SHA512_HMAC:
+        keyLen = 512/8;
+        keyGenType = CKM_SHA512_KEY_GEN;
+        break;
+    }
+
+    if (PK11_DoesMechanism(slots[0], keyGenType) == PR_FALSE) {
+        keyGenType = CKM_GENERIC_SECRET_KEY_GEN;
+        if (PK11_DoesMechanism(slots[0], keyGenType) == PR_FALSE) {
+            keyGenType = CKM_AES_KEY_GEN;
+            keyLen = 256/8;
+        }
+    }
+
     PK11SymKey **keys = calloc(num_slots, sizeof(PK11SymKey *));
     CK_FLAGS opFlags = CKF_SIGN | CKF_VERIFY;
-    if (establishSymKeyOnSlots(slots, num_slots, CKM_SHA256_HMAC, 16, opFlags, keys) == SECFailure) {
+    if (establishSymKeyOnSlots(slots, num_slots, keyGenType, keyLen, opFlags, keys) == SECFailure) {
         fprintf(stderr, "Failed to generate fresh HMAC keys on slots.\n");
         return TEST_ERROR;
     }
