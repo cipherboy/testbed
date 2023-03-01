@@ -96,11 +96,24 @@ PRBool ensureAllDoMech(PK11SlotInfo **slots, size_t num_slots, CK_MECHANISM_TYPE
     return PR_TRUE;
 }
 
+void printHex(FILE *stream, const unsigned char *value, size_t len) {
+    fprintf(stream, "%zu:", len);
+    for (size_t index = 0; index < len; index++) {
+        fprintf(stream, " %02x", value[index]);
+    }
+    fprintf(stream, "\n");
+}
+
 void reduceTemplate(CK_ATTRIBUTE *template, int *count) {
     int offset = 0;
     for (int i = 0; i < *count; i++) {
-        if (template[i].pValue != NULL && i != offset) {
-            template[offset] = template[i];
+        if (template[i].pValue != NULL && template[i].ulValueLen > 0) {
+            if (i != offset) {
+                fprintf(stderr, "[reducing template] Moving %d to %d.\n", i, offset);
+                template[offset] = template[i];
+            } else {
+                fprintf(stderr, "[reducing template] Keeping %d.\n", offset);
+            }
             offset += 1;
         }
     }
@@ -168,54 +181,28 @@ SECStatus establishSymKeyOnSlots(PK11SlotInfo **slots, size_t num_slots, CK_MECH
             PRBool owner = PR_TRUE;
             PRBool *token = template[4].pValue;
             if (token == NULL) {
-                token = malloc(sizeof(PRBool));
-                *token = PR_FALSE;
+                token = malloc(sizeof(CK_BBOOL));
+                *token = CK_TRUE;
+                template[4].pValue = token;
+                template[4].ulValueLen = sizeof(CK_BBOOL);
             }
 
             int attrs = MAX_OBJECT_ATTRS;
             reduceTemplate(template, &attrs);
-
-            bool haveValue = false;
-            bool haveClass = false;
-            for (int i = 0; i < attrs; i++) {
-                if (template[attrs].type == CKA_VALUE) {
-                    haveValue = true;
-                }
-                if (template[attrs].type == CKA_CLASS) {
-                    haveClass = true;
-                }
-            }
-
-            // No value on key when read from KMIP.
-            if (!haveValue) {
-                char fakeKey[] = {0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x00};
-                template[attrs].type = CKA_VALUE;
-                template[attrs].pValue = (char *)fakeKey;
-                template[attrs].ulValueLen = 16;
-                attrs += 1;
-            }
-
-            // No CK_CLASS returned from KMIP.
-            if (!haveClass) {
-                CK_OBJECT_CLASS ckClass = CKO_SECRET_KEY;
-                template[attrs].type = CKA_CLASS;
-                template[attrs].pValue = &ckClass;
-                template[attrs].ulValueLen = sizeof(ckClass);
-                attrs += 1;
-            }
 
             CK_SESSION_HANDLE sess = pk11_GetNewSession(dest_slot, &owner);
             CK_OBJECT_HANDLE obj = CK_INVALID_HANDLE;
             SECStatus ret = PK11_CreateNewObject(dest_slot, sess, template, attrs, *token, &obj);
             code = PORT_GetError();
             message = PORT_ErrorToString(code);
-            pk11_CloseSession(dest_slot, sess, owner);
+            // pk11_CloseSession(dest_slot, sess, owner);
 
             if (ret != SECSuccess || obj == CK_INVALID_HANDLE) {
                 fprintf(stderr, "[Slot %s / Token %s]->[Slot %s / Token %s] Failed to recreate symmetric key with mechanism %lx to destination slot via PK11_CreateNewObject(...) with %d attributes: (%d) %s\n", PK11_GetSlotName(default_slot), PK11_GetTokenName(default_slot), PK11_GetSlotName(dest_slot), PK11_GetTokenName(dest_slot), mech, MAX_OBJECT_ATTRS, code, message);
                 return SECFailure;
             }
 
+            fprintf(stderr, "[Slot %s / Token %s]->[Slot %s / Token %s]: New object handle was %lx.\n", PK11_GetSlotName(default_slot), PK11_GetTokenName(default_slot), PK11_GetSlotName(dest_slot), PK11_GetTokenName(dest_slot), obj);
             free(template);
 
             dest_key = PK11_SymKeyFromHandle(dest_slot, NULL, PK11_OriginGenerated, CKM_AES_ECB, obj, PR_TRUE, NULL);
@@ -251,8 +238,7 @@ test_ret_t doAESOp(PK11SlotInfo **slots, PK11SymKey **keys, size_t num_slots, CK
         PK11SlotInfo *slot = slots[index];
         PK11SymKey *key = keys[index];
 
-        ciphertexts[0] = calloc(maxLen, sizeof(unsigned char));
-
+        ciphertexts[index] = calloc(maxLen, sizeof(unsigned char));
         if (PK11_Encrypt(key, mech, param, ciphertexts[index], ciphertextLens + index, maxLen, data, dataLen) != SECSuccess) {
             PRErrorCode code = PORT_GetError();
             const char *message = PORT_ErrorToString(code);
@@ -262,6 +248,10 @@ test_ret_t doAESOp(PK11SlotInfo **slots, PK11SymKey **keys, size_t num_slots, CK
 
         if (ciphertextLens[index] == dataLen && memcmp(data, ciphertexts[index], dataLen) == 0) {
             fprintf(stderr, "[Slot %s / Token %s] Encryption %lx did nothing: ciphertext same as plaintext.\n", PK11_GetSlotName(slot), PK11_GetTokenName(slot), mech);
+            fprintf(stderr, "Ciphertext ");
+            printHex(stderr, ciphertexts[index], ciphertextLens[index]);
+            fprintf(stderr, "data ");
+            printHex(stderr, data, dataLen);
             return TEST_ERROR;
         }
 
@@ -276,26 +266,75 @@ test_ret_t doAESOp(PK11SlotInfo **slots, PK11SymKey **keys, size_t num_slots, CK
         }
 
         if (plaintextLen != dataLen || memcmp(data, plaintext, dataLen) != 0) {
-            fprintf(stderr, "[%zu Slot %s / Token %s] Round-tripping failed: different plaintext/ciphertext: %u / %u\n\tPlaintext: %s\n\tData: %s\n", index, PK11_GetSlotName(slot), PK11_GetTokenName(slot), plaintextLen, dataLen, plaintext, data);
+            fprintf(stderr, "[%zu Slot %s / Token %s] Round-tripping failed: different plaintext/ciphertext:\n", index, PK11_GetSlotName(slot), PK11_GetTokenName(slot));
+            fprintf(stderr, "plaintext ");
+            printHex(stderr, plaintext, plaintextLen);
+            fprintf(stderr, "data ");
+            printHex(stderr, data, dataLen);
             return TEST_ERROR;
         }
 
         free(plaintext);
     }
 
-    unsigned int ciphertextLen = ciphertextLens[0];
-    unsigned char *ciphertext = ciphertexts[0];
-    for (size_t index = 1; index < num_slots; index++) {
-        PK11SlotInfo *slot = slots[index];
-        unsigned int otherLen = ciphertextLens[index];
-        unsigned char *other = ciphertexts[index];
+    for (size_t base_index = 0; base_index < num_slots; base_index++) {
+        PK11SlotInfo *base_slot = slots[base_index];
+        PK11SymKey *base_key = keys[base_index];
+        unsigned int baseLen = ciphertextLens[base_index];
+        unsigned char *base = ciphertexts[base_index];
 
-        if (otherLen != ciphertextLen || memcmp(ciphertext, other, ciphertextLen) != 0) {
-            fprintf(stderr, "[%d Slot %s / Token %s] vs [%zu Slot %s / Token %s] Comparison test failed: different ciphertexts: %u / %u\n\tDefault Ciphertext: %s\n\tOther Ciphertext: %s\n", 0, PK11_GetSlotName(slots[0]), PK11_GetTokenName(slots[0]), index, PK11_GetSlotName(slot), PK11_GetTokenName(slot), ciphertextLen, otherLen, ciphertext, other);
-            return TEST_ERROR;
+        for (size_t other_index = base_index + 1; other_index < num_slots; other_index++) {
+            PK11SlotInfo *other_slot = slots[other_index];
+            PK11SymKey *other_key = keys[other_index];
+            unsigned int otherLen = ciphertextLens[other_index];
+            unsigned char *other = ciphertexts[other_index];
+
+            if (otherLen != baseLen || memcmp(base, other, baseLen) != 0) {
+                bool haveError = false;
+                /* Do a mutual decryption test before saying we're invalid. */
+                unsigned int basePlaintextLen = 0;
+                unsigned char *basePlaintext = calloc(maxLen, sizeof(unsigned char));
+                if (PK11_Decrypt(base_key, mech, param, basePlaintext, &basePlaintextLen, maxLen, other, otherLen) != SECSuccess) {
+                    PRErrorCode code = PORT_GetError();
+                    const char *message = PORT_ErrorToString(code);
+                    fprintf(stderr, "[base: %zu Slot %s / Token %s] vs [other: %zu Slot %s / Token %s] due to different ciphertexts, doing pairwise decryption test; failed decrypting other ciphertext on base (%d): %s\n", base_index, PK11_GetSlotName(base_slot), PK11_GetTokenName(base_slot), other_index, PK11_GetSlotName(other_slot), PK11_GetTokenName(other_slot), code, message);
+                    haveError = true;
+                }
+
+                unsigned int otherPlaintextLen = 0;
+                unsigned char *otherPlaintext = calloc(maxLen, sizeof(unsigned char));
+                if (PK11_Decrypt(other_key, mech, param, otherPlaintext, &otherPlaintextLen, maxLen, base, baseLen) != SECSuccess) {
+                    PRErrorCode code = PORT_GetError();
+                    const char *message = PORT_ErrorToString(code);
+                    fprintf(stderr, "[base: %zu Slot %s / Token %s] vs [other: %zu Slot %s / Token %s] due to different ciphertexts, doing pairwise decryption test; failed decrypting base ciphertext on other (%d): %s\n", base_index, PK11_GetSlotName(base_slot), PK11_GetTokenName(base_slot), other_index, PK11_GetSlotName(other_slot), PK11_GetTokenName(other_slot), code, message);
+                    haveError = true;
+                }
+
+                if (haveError || otherPlaintextLen != basePlaintextLen || memcmp(basePlaintext, otherPlaintext, basePlaintextLen) != 0) {
+                    fprintf(stderr, "[base: %zu Slot %s / Token %s] vs [other: %zu Slot %s / Token %s] Comparison test failed: different ciphertexts resulted in different pairwise plaintexts:\n", base_index, PK11_GetSlotName(base_slot), PK11_GetTokenName(base_slot), other_index, PK11_GetSlotName(other_slot), PK11_GetTokenName(other_slot));
+                    fprintf(stderr, "== DATA ==\n");
+                    fprintf(stderr, "\tdata ");
+                    printHex(stderr, data, dataLen);
+                    fprintf(stderr, "\n");
+
+                    fprintf(stderr, "== BASE ==\n");
+                    fprintf(stderr, "\tciphertext ");
+                    printHex(stderr, base, baseLen);
+                    fprintf(stderr, "\tpairwise plaintext ");
+                    printHex(stderr, basePlaintext, basePlaintextLen);
+                    fprintf(stderr, "\n");
+
+                    fprintf(stderr, "== OTHER ==\n");
+                    fprintf(stderr, "\tciphertext ");
+                    printHex(stderr, other, otherLen);
+                    fprintf(stderr, "\tpairwise plaintext ");
+                    printHex(stderr, otherPlaintext, otherPlaintextLen);
+                    fprintf(stderr, "\n");
+                }
+
+                return TEST_ERROR;
+            }
         }
-
-        free(other);
     }
 
     free(ciphertexts[0]);
