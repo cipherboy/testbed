@@ -21,12 +21,15 @@
 #define MAX_HMAC_OUTPUT_LEN 512
 #define MAX_RSA_OUTPUT_LEN 8192
 
+#ifdef NSS_ALLOWS_MANUAL_EXTRACTION
 // secmodi.h from the NSS distribution.
 SECStatus PK11_CreateNewObject(PK11SlotInfo *slot, CK_SESSION_HANDLE session,
                                const CK_ATTRIBUTE *theTemplate, int count,
                                PRBool token, CK_OBJECT_HANDLE *objectID);
 CK_SESSION_HANDLE pk11_GetNewSession(PK11SlotInfo *slot, PRBool *owner);
 void pk11_CloseSession(PK11SlotInfo *slot, CK_SESSION_HANDLE sess, PRBool own);
+#endif // NSS_ALLOWS_MANUAL_EXTRACTION
+
 
 SECStatus randUint(uint32_t *value) {
     return PK11_GenerateRandom((unsigned char *)value, sizeof(uint32_t)/sizeof(unsigned char));
@@ -135,6 +138,7 @@ SECStatus establishSymKeyOnSlots(PK11SlotInfo **slots, size_t num_slots, CK_MECH
             const char *message = PORT_ErrorToString(code);
             fprintf(stderr, "[Slot %s / Token %s]->[Slot %s / Token %s] Failed to move symmetric key with mechanism %lx to destination slot via PK11_MoveSymKey(...): (%d) %s\n", PK11_GetSlotName(default_slot), PK11_GetTokenName(default_slot), PK11_GetSlotName(dest_slot), PK11_GetTokenName(dest_slot), mech, code, message);
 
+#ifdef NSS_ALLOWS_MANUAL_EXTRACTION
             // The above very likely will fail, as vault-pkcs11-provider
             // lacks the ability to wrap keys currently. So we try
             // creating an object directly on the slot.
@@ -221,6 +225,10 @@ SECStatus establishSymKeyOnSlots(PK11SlotInfo **slots, size_t num_slots, CK_MECH
                 fprintf(stderr, "[Slot %s / Token %s]->[%zu Slot %s / Token %s] Failed to turn symmetric key from handle into object: (%d) %s\n", PK11_GetSlotName(default_slot), PK11_GetTokenName(default_slot), index, PK11_GetSlotName(dest_slot), PK11_GetTokenName(dest_slot), code, message);
                 return SECFailure;
             }
+
+#else // NSS_ALLOWS_MANUAL_EXTRACTION
+            return SECFailure;
+#endif // NSS_ALLOWS_MANUAL_EXTRACTION
         }
 
         keys[index] = dest_key;
