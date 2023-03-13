@@ -515,9 +515,6 @@ test_ret_t testAESOp(PK11SlotInfo **slots, size_t num_slots, CK_MECHANISM_TYPE m
         }
         ctrLen *= 8; // Bits, not bytes.
 
-        fprintf(stderr, "Dispatching mechanism %lu: dataLen=%u, ivLen=%u, aadLen=%u, ctrLen=%u, iv=", mech, dataLen, ivLen, aadLen, ctrLen);
-        printHex(stderr, iv, ivLen);
-
         test_ret_t ret;
         switch (mech) {
         case CKM_AES_ECB:
