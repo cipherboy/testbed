@@ -1,0 +1,6 @@
+github.com/etnz/permute v1.0.2 h1:SLHc4egouLpm/sB5jv1xPSRFhi++PoDdG8n3/KWozbo=
+github.com/etnz/permute v1.0.2/go.mod h1:v+8QNLHavTwYHo3baAja+FJVMBfWvTpD8Hw5P1fqiSw=
+github.com/openbao/openbao/sdk/v2 v2.6.0 h1:zB2pI+3vRfbGWMpZvhPwAqjFs/c0uNPuzx0FTVJBm7g=
+github.com/openbao/openbao/sdk/v2 v2.6.0/go.mod h1:lAZpv+olMy8zq3UP5w05zRfrF7nPpuayfKNnuFx+f4I=
+golang.org/x/crypto v0.52.0 h1:RMs7fP2rXdep0CftQlK8Uf+kibLm7qkCcradZWYz988=
+golang.org/x/crypto v0.52.0/go.mod h1:1QgfPxDqh0T2M/elOJtp9RvuR95kVjir0e6/BvEmGbc=
